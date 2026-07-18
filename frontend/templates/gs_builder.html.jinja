@@ -1,0 +1,105 @@
+{% extends "base.html.jinja" %}
+{% block title %} — Gold Standard{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Gold Standard Builder</h1>
+<p class="page-sub">Carica una pagina, copia manualmente il testo informativo e salvalo come riferimento.</p>
+
+{% if message %}<div class="alert success">{{ message }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if load_error %}<div class="alert error"><strong>Errore caricamento HTML:</strong> {{ load_error }}</div>{% endif %}
+
+<form action="/gs-builder" method="get" class="form-card js-loading" data-loading="Caricamento HTML in corso…">
+  <div class="form-row">
+    <div class="field">
+      <label for="domainSelect">Dominio</label>
+      <select id="domainSelect" name="domain" onchange="this.form.submit()">
+        {% for domain in domains %}
+        <option value="{{ domain }}" {% if domain == selected_domain %}selected{% endif %}>{{ domain }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field field-grow">
+      <label for="urlInput">URL</label>
+      <input type="url" id="urlInput" name="url" required value="{{ selected_url }}" placeholder="https://it.wikipedia.org/wiki/…">
+    </div>
+    <button type="submit" class="btn-primary">Carica HTML</button>
+  </div>
+</form>
+
+{% if loaded_html %}
+<form action="/gs-builder/save" method="post" class="form-card js-loading" data-loading="Salvataggio in corso…">
+  <input type="hidden" name="domain" value="{{ selected_domain }}">
+  <input type="hidden" name="url" value="{{ selected_url }}">
+  <input type="hidden" name="html_text" value="{{ loaded_html | e }}">
+
+  <div class="field">
+    <label>HTML scaricato</label>
+    <div class="panel-body small"><pre>{{ loaded_html | e }}</pre></div>
+    <small class="hint">Apri l'URL nel browser, copia manualmente il solo testo informativo e incollalo qui sotto.</small>
+  </div>
+
+  <div class="field" style="margin-top:1rem;">
+    <label for="goldText">Gold text {% if loaded_gold_text %}<span class="edit-hint">— modifica entry esistente</span>{% endif %}</label>
+    <textarea id="goldText" name="gold_text" required rows="14" placeholder="Incolla qui il testo pulito copiato dalla pagina…">{{ loaded_gold_text }}</textarea>
+  </div>
+
+  <button type="submit" class="btn-primary" style="margin-top:1rem;">Salva nel database</button>
+</form>
+{% endif %}
+
+<section class="gs-list-card">
+  <h3>URL già nel GS · {{ selected_domain }} · {{ existing_urls|length }}</h3>
+  {% if existing_urls %}
+  <ul class="url-list">
+    {% for u in existing_urls %}
+    <li>
+      <a href="{{ u }}" target="_blank" rel="noopener" class="url-link">{{ u }}</a>
+      <a href="/gs-builder?domain={{ selected_domain }}&url={{ u | urlencode }}" class="btn-edit" title="Modifica entry">✎</a>
+      <button type="button" class="btn-danger js-delete" data-url="{{ u }}" title="Elimina dal Gold Standard">×</button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">Nessun URL nel Gold Standard per questo dominio.</p>
+  {% endif %}
+</section>
+
+<div class="modal-backdrop" id="deleteModal" hidden>
+  <div class="modal">
+    <h3>Conferma eliminazione</h3>
+    <p>Vuoi eliminare questa entry dal Gold Standard?</p>
+    <p class="modal-url" id="deleteModalUrl"></p>
+    <form action="/gs-builder/delete" method="post" class="modal-actions js-loading" data-loading="Eliminazione in corso…">
+      <input type="hidden" name="domain" value="{{ selected_domain }}">
+      <input type="hidden" name="url" id="deleteModalInput">
+      <button type="button" class="btn-secondary" id="deleteModalCancel">Annulla</button>
+      <button type="submit" class="btn-danger-solid">Elimina</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    const modal = document.getElementById('deleteModal');
+    const urlField = document.getElementById('deleteModalInput');
+    const urlLabel = document.getElementById('deleteModalUrl');
+    const cancelBtn = document.getElementById('deleteModalCancel');
+
+    document.querySelectorAll('.js-delete').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        urlField.value = btn.dataset.url;
+        urlLabel.textContent = btn.dataset.url;
+        modal.hidden = false;
+      });
+    });
+
+    function close() { modal.hidden = true; }
+    cancelBtn.addEventListener('click', close);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+  })();
+</script>
+{% endblock %}

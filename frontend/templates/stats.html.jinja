@@ -1,0 +1,54 @@
+{% extends "base.html.jinja" %}
+{% block title %} — Stats{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Stats</h1>
+<p class="page-sub">Panoramica aggregata per dominio. Le metriche di valutazione vengono popolate eseguendo <code>/full_gs_eval</code> dalla pagina Parser.</p>
+
+<div class="stats-table-wrap">
+  <table class="stats-table">
+    <thead>
+      <tr>
+        <th>Dominio</th>
+        <th>web_resources</th>
+        <th>gold_standard</th>
+        <th>Precision</th>
+        <th>Recall</th>
+        <th>F1</th>
+        <th>Cosine</th>
+        <th>Jaccard</th>
+        <th>Excess</th>
+        <th>Judge</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for domain in domains %}
+      {% set wr_count = db_stats.web_resources.get(domain, 0) %}
+      {% set gs_count = db_stats.gold_standard.get(domain, 0) %}
+      {% set eval = db_stats.avg_eval.get(domain) %}
+      {% set judge = db_stats.avg_eval_judge.get(domain) %}
+      <tr>
+        <td class="domain-cell">{{ domain }}</td>
+        <td>{{ wr_count }}</td>
+        <td>{{ gs_count }}</td>
+        {% if eval %}
+        <td>{{ "%.4f"|format(eval.token_level_eval.precision) }}</td>
+        <td>{{ "%.4f"|format(eval.token_level_eval.recall) }}</td>
+        <td>{{ "%.4f"|format(eval.token_level_eval.f1) }}</td>
+        <td>{{ "%.4f"|format(eval.similarity_eval.cosine) }}</td>
+        <td>{{ "%.4f"|format(eval.similarity_eval.jaccard) }}</td>
+        <td>{{ "%.4f"|format(eval.similarity_eval.excess_ratio) }}</td>
+        {% else %}
+        <td class="muted" colspan="6">non ancora calcolato</td>
+        {% endif %}
+        {% if judge %}
+        <td>{{ "%.2f"|format(judge.judge_score) }}</td>
+        {% else %}
+        <td class="muted">—</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

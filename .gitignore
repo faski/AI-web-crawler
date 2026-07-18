@@ -1,0 +1,17 @@
+__pycache__
+.DS_Store
+output/
+*.log
+.env
+.env.local
+
+# Grader bundle (tarball pesante, non va nel repo)
+lab-grader.tar.gz
+lab-grader-progetto-finale.tar
+
+# Dati locali dei volumi (bind mount) — non vanno nel repo
+mariadb_data/data/
+ollama_data/data/
+
+# Report output
+output/

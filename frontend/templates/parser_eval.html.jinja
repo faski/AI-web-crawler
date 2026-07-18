@@ -1,0 +1,308 @@
+{% extends "base.html.jinja" %}
+{% block title %} — Parser{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Parser &amp; Evaluation</h1>
+<p class="page-sub">Esegui il parser su un URL e confronta l'output col Gold Standard.</p>
+
+<div class="form-card" style="margin-bottom:1.5rem;">
+  <div class="field">
+    <label>Scegli un URL dal Gold Standard</label>
+    <div class="mode-toggle">
+      {% for d in gs_urls_by_domain.keys() %}
+      <label class="mode-option">
+        <input type="radio" name="gsDomain" value="{{ d }}">
+        <span>{{ d }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="field" style="margin-top:1rem;">
+    <label for="urlSelect">URL</label>
+    <select id="urlSelect">
+      <option value="">— seleziona un URL —</option>
+    </select>
+  </div>
+</div>
+
+<form action="/parser" method="get" class="form-card js-loading" data-loading="Parsing e valutazione in corso…">
+  <div class="field">
+    <label for="urlInput">URL</label>
+    <input type="url" id="urlInput" name="url" required value="{{ selected_url }}" placeholder="https://it.wikipedia.org/wiki/…">
+  </div>
+
+  <div class="field" style="margin-top:1rem;">
+    <label>Modalità</label>
+    <div class="mode-toggle">
+      <label class="mode-option">
+        <input type="radio" name="mode" value="live" {% if selected_mode == 'live' %}checked{% endif %}>
+        <span>Live</span>
+        <small>scarica dal web</small>
+      </label>
+      <label class="mode-option">
+        <input type="radio" name="mode" value="local" {% if selected_mode == 'local' %}checked{% endif %}>
+        <span>Local</span>
+        <small>usa HTML dal DB</small>
+      </label>
+    </div>
+  </div>
+
+  <button type="submit" class="btn-primary" style="margin-top:1rem;">Esegui parsing e valutazione</button>
+</form>
+
+{% if result %}
+  {% if result.error %}
+    <div class="alert error"><strong>Errore:</strong> {{ result.error }}</div>
+  {% else %}
+    {% set data = result.data %}
+    {% set has_gs = result.gold_text is defined and result.gold_text %}
+
+    {% if data.fallback_used %}
+      <div class="alert warn">
+        <strong>Live bloccato:</strong> il sito ha rifiutato il crawl in tempo reale
+        (probabile protezione anti-bot), quindi è stato usato l'HTML salvato nel
+        database come fallback.
+      </div>
+    {% endif %}
+
+    <div class="result-header">
+      {% if data.title %}<h2>{{ data.title }}</h2>{% endif %}
+      <a href="{{ result.url }}" target="_blank" rel="noopener" class="result-url">{{ result.url }}</a>
+    </div>
+
+    <section class="panels-grid">
+      <div class="panel">
+        <div class="panel-header">
+          <span>Input HTML</span>
+          <span class="panel-info">{{ data.html_text.split()|length }} parole</span>
+        </div>
+        <div class="panel-body"><pre>{{ data.html_text | e }}</pre></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <span>Output parser (Markdown)</span>
+          <span class="panel-info">{{ data.parsed_text.split()|length }} parole</span>
+        </div>
+        <div class="panel-body"><pre>{{ data.parsed_text | e }}</pre></div>
+      </div>
+    </section>
+
+    <section class="panels-grid">
+      <div class="panel">
+        <div class="panel-header">
+          <span>Cleaned text (post strip_markdown)</span>
+          <span class="panel-info">{{ result.cleaned_text.split()|length }} parole</span>
+        </div>
+        <div class="panel-body"><pre>{{ result.cleaned_text | e }}</pre></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <span>Gold text</span>
+          {% if has_gs %}
+          <span class="panel-info">{{ result.gold_text.split()|length }} parole</span>
+          {% else %}
+          <span class="panel-info">URL non presente nel Gold Standard</span>
+          {% endif %}
+        </div>
+        <div class="panel-body">
+          {% if has_gs %}
+          <pre>{{ result.gold_text | e }}</pre>
+          {% else %}
+          <p class="muted" style="padding:1rem 0;">Nessun gold_text disponibile per questo URL. Aggiungilo dalla <a href="/gs-builder">pagina Gold Standard</a> per abilitare il confronto.</p>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+
+    {% if has_gs %}
+    <section class="diff-section">
+      <div class="panel-header">
+        <span>Diff: Cleaned text vs Gold text</span>
+        <span class="panel-info">sinistra = cleaned · destra = gold</span>
+      </div>
+      <div id="monaco-diff" style="height:560px;"></div>
+    </section>
+
+    {% if result.eval %}
+    <section class="eval-section">
+      <h3 class="eval-section-title">Token-level eval <span class="eval-section-sub">set-based su token unici</span></h3>
+      <div class="stat-cards cols-3">
+        <div class="stat-card">
+          <div class="stat-label">Precision</div>
+          <div class="stat-value">{{ "%.2f"|format(result.eval.token_level_eval.precision) }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Recall</div>
+          <div class="stat-value">{{ "%.2f"|format(result.eval.token_level_eval.recall) }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">F1</div>
+          <div class="stat-value">{{ "%.2f"|format(result.eval.token_level_eval.f1) }}</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="eval-section">
+      <h3 class="eval-section-title">Similarity eval <span class="eval-section-sub">vettori di frequenza</span></h3>
+      <div class="stat-cards cols-3">
+        <div class="stat-card">
+          <div class="stat-label">Cosine</div>
+          <div class="stat-value">{{ "%.2f"|format(result.eval.similarity_eval.cosine) }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Jaccard</div>
+          <div class="stat-value">{{ "%.2f"|format(result.eval.similarity_eval.jaccard) }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Excess ratio</div>
+          <div class="stat-value">{{ "%.2f"|format(result.eval.similarity_eval.excess_ratio) }}</div>
+          <div class="stat-foot">lower is better</div>
+        </div>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if result.judge %}
+    <section class="eval-section">
+      <h3 class="eval-section-title">LLM Judge <span class="eval-section-sub">{{ result.judge.model_name }}</span></h3>
+      <div class="stat-cards cols-judge">
+        <div class="stat-card">
+          <div class="stat-label">Score</div>
+          <div class="stat-value">{{ result.judge.judge_score }}<span class="stat-denom">/5</span></div>
+        </div>
+        <div class="stat-card stat-card-wide">
+          <div class="stat-label">Giudizio complessivo</div>
+          <p class="stat-text">{{ result.judge.judge_feedback }}</p>
+        </div>
+      </div>
+
+      <div class="diff-section" style="margin-top:1.25rem;">
+        <div class="panel-header">
+          <span>Testi inviati al judge (primi {{ result.judge_text_cap }} caratteri)</span>
+          <span class="panel-info">sinistra = parsed · destra = gold</span>
+        </div>
+        <div id="monaco-judge-diff" style="height:420px;"></div>
+      </div>
+    </section>
+    {% endif %}
+    {% endif %}
+  {% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // URLs of the Gold Standard, grouped by domain. Picking a domain badge fills
+  // the URL dropdown; picking a URL copies it into the main input field.
+  var urlsByDomain = {{ gs_urls_by_domain | tojson }};
+  var selectedUrl = {{ selected_url | tojson }};
+
+  var urlInput = document.getElementById('urlInput');
+  var urlSelect = document.getElementById('urlSelect');
+  var domainRadios = document.querySelectorAll('input[name="gsDomain"]');
+
+  function fillUrls(domain) {
+    urlSelect.innerHTML = '<option value="">— seleziona un URL —</option>';
+    var urls = urlsByDomain[domain] || [];
+    for (var i = 0; i < urls.length; i++) {
+      var option = document.createElement('option');
+      option.value = urls[i];
+      option.textContent = urls[i];
+      urlSelect.appendChild(option);
+    }
+  }
+
+  for (var i = 0; i < domainRadios.length; i++) {
+    domainRadios[i].addEventListener('change', function () {
+      fillUrls(this.value);
+    });
+  }
+
+  // Picking a URL fills the input below, then the dropdown resets to its
+  // placeholder (the chosen domain badge stays selected).
+  urlSelect.addEventListener('change', function () {
+    if (this.value) {
+      urlInput.value = this.value;
+      this.selectedIndex = 0;
+    }
+  });
+
+  function activateDomain(domain) {
+    for (var j = 0; j < domainRadios.length; j++) {
+      if (domainRadios[j].value === domain) {
+        domainRadios[j].checked = true;
+      }
+    }
+    fillUrls(domain);
+  }
+
+  // On load: keep the badge of the used URL's domain active after a search,
+  // otherwise start with Wikipedia selected (or the first domain available).
+  var startDomain = null;
+  if (selectedUrl) {
+    for (var domain in urlsByDomain) {
+      if (urlsByDomain[domain].indexOf(selectedUrl) !== -1) {
+        startDomain = domain;
+        break;
+      }
+    }
+  }
+  if (!startDomain) {
+    for (var domain in urlsByDomain) {
+      if (domain.indexOf('wikipedia') !== -1) {
+        startDomain = domain;
+        break;
+      }
+    }
+  }
+  if (!startDomain && domainRadios.length > 0) {
+    startDomain = domainRadios[0].value;
+  }
+  if (startDomain) {
+    activateDomain(startDomain);
+  }
+</script>
+
+{% if result and not result.error and result.gold_text %}
+<script>
+  var __cleanedText = {{ result.cleaned_text | tojson }};
+  var __goldText    = {{ result.gold_text | tojson }};
+  var __judgeParsedPreview = {{ result.judge_parsed_preview | default('') | tojson }};
+  var __judgeGoldPreview   = {{ result.judge_gold_preview | default('') | tojson }};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
+<script>
+  require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs' } });
+
+  // Build a read-only side-by-side diff into the element with the given id.
+  // Skips silently if the element is not on the page.
+  function makeDiff(elementId, originalText, modifiedText) {
+    var container = document.getElementById(elementId);
+    if (!container) return;
+    monaco.editor.createDiffEditor(container, {
+      readOnly: true,
+      renderSideBySide: true,
+      automaticLayout: true,
+      theme: 'vs',
+      fontSize: 13,
+      wordWrap: 'on',
+      diffWordWrap: 'on',
+      scrollBeyondLastLine: false,
+      selectionHighlight: false,
+      occurrencesHighlight: 'off',
+      renderLineHighlight: 'none',
+    }).setModel({
+      original: monaco.editor.createModel(originalText, 'plaintext'),
+      modified: monaco.editor.createModel(modifiedText, 'plaintext'),
+    });
+  }
+
+  require(['vs/editor/editor.main'], function () {
+    // Full text comparison.
+    makeDiff('monaco-diff', __cleanedText, __goldText);
+    makeDiff('monaco-judge-diff', __judgeParsedPreview, __judgeGoldPreview);
+  });
+</script>
+{% endif %}
+{% endblock %}

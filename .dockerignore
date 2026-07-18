@@ -1,0 +1,55 @@
+# Git
+.git/
+.gitignore
+.github/
+
+# Python bytecode
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual envs / package managers
+.venv/
+.pixi/
+**/.conda/
+
+# Testing
+**/tests/
+**/.pytest_cache/
+output/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+**/.DS_Store
+*.swp
+*.swo
+
+# Docker files (not needed inside the build context)
+**/Dockerfile
+**/.dockerignore
+docker-compose*.yml
+docker-compose*.yaml
+
+# Dev artifacts
+*.log
+*.tmp
+.env
+.env.local
+
+# Service files for sibling containers (not needed inside the backend/frontend images)
+mariadb_data/
+ollama_data/
+
+# Heavy bundles and documents that don't belong in the Python service images
+docs/
+lab-grader.tar.gz
+report.pdf
+report.tex
+
+# Local documentation and tooling
+*.md
+Makefile

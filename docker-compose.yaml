@@ -1,0 +1,71 @@
+services:
+  mariadb:
+    image: mariadb:11.8.8
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: creeping_crawler
+      MARIADB_USER: creeping_crawler
+      MARIADB_PASSWORD: creeping_crawler
+    volumes:
+      - ./mariadb_data/data:/var/lib/mysql
+      - ./mariadb_data/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      # Healthy only once the database accepts connections and InnoDB is ready.
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  ollama:
+    image: ollama/ollama:0.30.10
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    volumes:
+      - ./ollama_data/data:/root/.ollama
+      - ./ollama_data/entrypoint.sh:/entrypoint.sh
+    healthcheck:
+      # Healthy only once the model has finished downloading.
+      # On the first boot the pull can take a few minutes.
+      test: ["CMD-SHELL", "ollama list | grep -q llama3.2:3b"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    environment:
+      DB_HOST: mariadb
+      DB_NAME: creeping_crawler
+      DB_USER: creeping_crawler
+      DB_PASSWORD: creeping_crawler
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: llama3.2:3b
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8004:8004"
+    environment:
+      BACKEND_URL: http://backend:8003
+    depends_on:
+      - backend

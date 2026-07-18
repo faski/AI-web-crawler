@@ -1,0 +1,70 @@
+{% extends "base.html.jinja" %}
+{% block title %} — Home{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h1>Creeping Crawler</h1>
+  <p class="hero-sub">
+    Pipeline end-to-end per acquisire, parsare e valutare la qualità di contenuti web
+    da sorgenti eterogenee, con valutazione automatica via LLM judge.
+  </p>
+</section>
+
+<section class="card-grid">
+  <a href="/parser" class="nav-card">
+    <span class="nav-card-icon">⟐</span>
+    <h2>Parser &amp; Evaluation</h2>
+    <p>Testa il parser su un URL live o dal database e confronta col Gold Standard.</p>
+  </a>
+  <a href="/gs-builder" class="nav-card">
+    <span class="nav-card-icon">◇</span>
+    <h2>Gold Standard</h2>
+    <p>Costruisci e gestisci il dataset di riferimento: carica HTML, salva il testo pulito.</p>
+  </a>
+  <a href="/stats" class="nav-card">
+    <span class="nav-card-icon">▥</span>
+    <h2>Stats</h2>
+    <p>Panoramica aggregata: conteggi, metriche medie e judge score per dominio.</p>
+  </a>
+</section>
+
+<section class="info-row">
+  <div class="info-card">
+    <h3>Gruppo</h3>
+    <ul class="badge-list">
+      {% for member in group_members %}
+      <li><span class="member-name">{{ member.name }}</span><span class="member-id">{{ member.id }}</span></li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div class="info-card">
+    <h3>System status</h3>
+    <ul class="status-list">
+      <li>
+        <span class="status-dot {{ 'ok' if status.backend == 'ok' else 'error' }}"></span>
+        Backend
+      </li>
+      <li>
+        <span class="status-dot {{ 'ok' if status.database == 'ok' else 'error' }}"></span>
+        MariaDB
+      </li>
+      <li>
+        <span class="status-dot {{ 'ok' if status.ollama == 'ok' else 'error' }}"></span>
+        Ollama
+      </li>
+    </ul>
+  </div>
+
+  <div class="info-card">
+    <h3>Domini supportati</h3>
+    <ul class="domain-list">
+      {% for domain in domains %}
+      <li>{{ domain }}</li>
+      {% else %}
+      <li class="muted">Nessun dominio configurato.</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endblock %}

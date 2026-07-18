@@ -1,0 +1,10 @@
+{% extends "base.html.jinja" %}
+{% block title %} — Errore{% endblock %}
+
+{% block content %}
+<div class="error-screen">
+  <h1>Backend non disponibile</h1>
+  <p>Il server backend non è raggiungibile sulla porta 8003.</p>
+  <button class="btn-primary" onclick="location.reload()">Ricarica</button>
+</div>
+{% endblock %}

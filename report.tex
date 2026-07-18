@@ -1,0 +1,224 @@
+\documentclass[11pt]{article}
+
+\usepackage[final]{acl}
+
+\usepackage{times}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{booktabs}
+
+\title{Creeping Crawler}
+
+\author{Lapo Siciliani \\
+  \texttt{2007890} \\\And
+  Fabio Priori \\
+  \texttt{1938446} \\\And
+  Tamer Hayek \\
+  \texttt{1897438} \\}
+
+\begin{document}
+\maketitle
+
+% ─── 1. Obiettivo ────────────────────────────────────────────────────────────
+
+\section{Obiettivo del Progetto}
+
+Creeping Crawler è una pipeline end-to-end per l'acquisizione e l'analisi di contenuti testuali da sorgenti web eterogenee, progettata per alimentare sistemi RAG e modelli linguistici. Il sistema scarica pagine web tramite Crawl4AI, le trasforma in testo pulito tramite parser specifici per dominio, ne valuta la qualità di estrazione confrontando l'output con un Gold Standard costruito manualmente (metriche quantitative e giudizio LLM), e persiste ogni dato in un database relazionale. Tutte le funzionalità sono esposte via API REST e da un'interfaccia web.
+
+% ─── 2. Architettura ─────────────────────────────────────────────────────────
+
+\section{Architettura}
+
+Il sistema è composto da \textbf{quattro container Docker} orchestrati da \texttt{docker-compose.yaml}:
+
+\begin{itemize}
+  \item \textbf{backend} — server FastAPI con crawler, parser, valutazione e API REST (porta 8003);
+  \item \textbf{frontend} — server FastAPI + Jinja2 per la Web UI (porta 8004);
+  \item \textbf{database} — MariaDB con i dati persistenti (porta 3306);
+  \item \textbf{ollama} — server LLM locale per il giudice (porta 11434).
+\end{itemize}
+
+All'avvio il backend inizializza il pool di connessioni, popola il DB dai Gold Standard (se vuoto) e pre-calcola le metriche quantitative, così che il sistema sia subito interrogabile senza passaggi manuali.
+
+% ─── 3. Parser (Ob. 1) ───────────────────────────────────────────────────────
+
+\section{Parser e Acquisizione}
+
+Il modulo \texttt{src/lib/crawling/} è basato su \textbf{Crawl4AI} (browser Chromium headless, avviato una sola volta e riusato). \texttt{fetch\_page} esegue il crawl live con la configurazione del dominio; \texttt{fetch\_page\_from\_html} riparsa un HTML già salvato tramite lo schema \texttt{raw:}, senza browser. La sottocartella \texttt{domains/} contiene un \texttt{CrawlerRunConfig} per ciascun dominio (esclusione di tag e selettori CSS non pertinenti; modalità \texttt{magic} per la gestione automatica dei blocchi anti-bot).
+
+Il modulo \texttt{src/lib/parsers/} definisce l'interfaccia astratta \texttt{ContentParser} con implementazioni per Wikipedia, ESPN, CNBC e XE, più un \texttt{PassThroughParser} di fallback per i domini non registrati. Ogni parser opera sul Markdown prodotto da Crawl4AI: interrompe la raccolta alle sezioni boilerplate e rimuove pattern residui tramite espressioni regolari.
+
+% ─── 4. Gold Standard e Database (Ob. 2 e 5) ─────────────────────────────────
+
+\section{Gold Standard e Database}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Colonna} & \textbf{Tipo} & \textbf{Chiave}\\
+\midrule
+\multicolumn{3}{l}{\emph{web\_resources} (obbligatoria)}\\
+\quad url         & varchar(2048) & PK \\
+\quad domain      & varchar(255)  & \\
+\quad title       & varchar(2048) & \\
+\quad html\_text  & longtext      & \\
+\quad created\_at & datetime      & \\
+\midrule
+\multicolumn{3}{l}{\emph{gold\_standard} (obbligatoria)}\\
+\quad url         & varchar(2048) & PK, FK \\
+\quad gold\_text  & longtext      & \\
+\quad created\_at & datetime      & \\
+\midrule
+\multicolumn{3}{l}{\emph{evaluations} (aggiuntiva, non richiesta)}\\
+\quad url                 & varchar(2048) & PK, FK \\
+\quad precision\_val\,\ldots\,excess\_ratio & double & \\
+\quad judge\_score        & int           & \\
+\quad updated\_at         & datetime      & \\
+\bottomrule
+\end{tabular}
+\caption{Schema del database. Le chiavi esterne di \texttt{gold\_standard} e \texttt{evaluations} referenziano \texttt{web\_resources.url} (\texttt{ON DELETE CASCADE}).}
+\label{tab:schema}
+\end{table}
+
+Il Gold Standard è costruito manualmente e salvato come file JSON in \texttt{gs\_data/} (uno per dominio), che fungono da seed. Il DBMS è \textbf{MariaDB}. Lo schema (definito in \texttt{init.sql} ed esposto da \texttt{GET /db\_schema}) è organizzato in tre tabelle (Tabella~\ref{tab:schema}): \texttt{web\_resources} conserva l'HTML grezzo, \texttt{gold\_standard} il testo di riferimento in relazione 1-a-1, ed \texttt{evaluations} le metriche e il \texttt{judge\_score}. Solo le prime due sono richieste dalla specifica; \texttt{evaluations} è una tabella aggiuntiva che abbiamo introdotto come archivio dei risultati.
+
+Al primo avvio uno script di inizializzazione idempotente carica automaticamente i JSON nel DB (HTML grezzo e \texttt{gold\_text}), rendendo il parsing rieseguibile offline e le valutazioni immediatamente disponibili.
+
+% ─── 5. Valutazione Parser (Ob. 3) ───────────────────────────────────────────
+
+\section{Valutazione dei Parser}
+
+\paragraph{Metodologia.} Ogni parser viene valutato su 10 URL per dominio tramite \texttt{GET /full\_gs\_eval}, che usa l'HTML statico salvato nel DB (nessun crawl live) per garantire ripetibilità. Il testo estratto viene passato per \texttt{strip\_markdown} prima del confronto, così da normalizzare quote tipografiche, trattini Unicode ed entità HTML. Le metriche set-based (obbligatoria \texttt{token\_level\_eval}) operano su insiemi di token unici; le metriche vettoriali (cosine, Jaccard, excess ratio) operano sui conteggi di frequenza tramite \texttt{Counter}.
+
+\paragraph{Risultati.} Le tabelle riportano i valori medi su tutto il Gold Standard per ciascun dominio.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+\textbf{Dominio} & \textbf{Precision} & \textbf{Recall} & \textbf{F1}\\
+\midrule
+it.wikipedia.org  & 0.9832 & 0.9774 & 0.9802 \\
+www.espn.com      & 0.9993 & 0.9983 & 0.9988 \\
+www.cnbc.com      & 0.9988 & 0.9999 & 0.9993 \\
+www.xe.com        & 0.9871 & 0.9849 & 0.9858 \\
+\bottomrule
+\end{tabular}
+\caption{Token Level Eval — metriche set-based medie per dominio.}
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+\textbf{Dominio} & \textbf{Cosine} & \textbf{Jaccard} & \textbf{Excess Ratio}\\
+\midrule
+it.wikipedia.org  & 0.9949 & 0.9617 & 0.0115 \\
+www.espn.com      & 0.9802 & 0.9977 & 0.0185 \\
+www.cnbc.com      & 1.0000 & 0.9986 & 0.0006 \\
+www.xe.com        & 0.9924 & 0.9725 & 0.0253 \\
+\bottomrule
+\end{tabular}
+\caption{Similarity Eval — metriche vettoriali medie per dominio (Excess Ratio: più basso è meglio).}
+\end{table}
+
+\paragraph{Nota su \texttt{www.espn.com} — antibot e fallback al DB.} ESPN ha aggiornato le proprie protezioni anti-bot: il crawl live restituisce ora una pagina di blocco invece dell'articolo. Il sistema gestisce esplicitamente questo caso: quando il crawl live fallisce, l'endpoint \texttt{/parse} ricade automaticamente sull'HTML salvato nel DB (segnalando \texttt{fallback\_used}). La valutazione, che usa comunque sempre l'HTML statico del DB, non è quindi influenzata dal blocco.
+
+% ─── 6. LLM-as-Judge (Ob. 4) ─────────────────────────────────────────────────
+
+\section{LLM-as-Judge}
+
+Oltre alle metriche quantitative, un giudice LLM valuta la qualità del testo estratto. Il modello gira in locale tramite \textbf{Ollama}: tra i cinque modelli candidati proposti (gemma, \texttt{llama3.2:3b}, \texttt{phi4-mini}, \texttt{qwen3:4b}, \texttt{ministral}) è stato scelto \texttt{llama3.2:3b}, buon compromesso tra qualità del giudizio e velocità su CPU. Testo estratto e Gold Standard (ripuliti dal Markdown e troncati a 1000 caratteri per contenere i tempi) sono inviati in un prompt strutturato che richiede una risposta JSON con \texttt{feedback} e \texttt{score} intero da 1 a 5. Il formato è forzato tramite constrained decoding; è comunque previsto un fallback robusto (score minimo e feedback diagnostico) qualora la risposta non sia interpretabile.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lc}
+\toprule
+\textbf{Dominio} & \textbf{Judge Score}\\
+\midrule
+it.wikipedia.org  & 4.60 \\
+www.espn.com      & 4.50 \\
+www.cnbc.com      & 4.30 \\
+www.xe.com        & 4.40 \\
+\bottomrule
+\end{tabular}
+\caption{Judge Eval — punteggio medio per dominio assegnato dal giudice LLM (scala 1--5).}
+\end{table}
+
+% ─── 7. API REST (Ob. 6) ─────────────────────────────────────────────────────
+
+\section{API REST}
+
+Il backend FastAPI espone gli endpoint richiesti dalla specifica, con validazione I/O tramite Pydantic e gestione esplicita degli errori (dominio non supportato, URL irraggiungibile o assente nel DB):
+
+\begin{itemize}
+  \item \texttt{POST /parse}\\
+  Parsing di un URL. Body: \texttt{\{url, local?\}}; \texttt{local} sceglie tra copia nel DB e crawl live (con fallback al DB).
+  \item \texttt{GET /domains}\\
+  Domini supportati. Nessun parametro.
+  \item \texttt{GET /gold\_standard}\\
+  Entry del GS per un URL. Query: \texttt{url}.
+  \item \texttt{GET /gold\_standard\_urls}\\
+  URL del GS per un dominio. Query: \texttt{domain}.
+  \item \texttt{POST /evaluate}\\
+  Metriche quantitative. Body: \texttt{\{parsed\_text, gold\_text\}}.
+  \item \texttt{POST /evaluate\_judge}\\
+  Giudizio LLM. Body: \texttt{\{parsed\_text, gold\_text\}}.
+  \item \texttt{GET /full\_gs\_eval}\\
+  Media aggregata (metriche + \texttt{judge\_score}) su un dominio. Query: \texttt{domain}.
+  \item \texttt{POST /add\_web\_resource}\\
+  Inserisce una risorsa web. Body: \texttt{\{url, html\_text\}}.
+  \item \texttt{POST /add\_gold\_standard}\\
+  Inserisce un'entry del GS. Body: \texttt{\{url, gold\_text\}}.
+  \item \texttt{DELETE /web\_resource}\\
+  Rimuove una risorsa, in cascata sul GS collegato. Body: \texttt{\{url\}}.
+  \item \texttt{DELETE /gold\_standard}\\
+  Rimuove solo l'entry del GS. Body: \texttt{\{url\}}.
+  \item \texttt{GET /db\_stats}\\
+  Conteggi e medie per dominio. Nessun parametro.
+  \item \texttt{GET /db\_schema}\\
+  Schema del DB. Nessun parametro.
+  \item \texttt{GET /status}\\
+  Salute di backend, database e Ollama (sempre HTTP 200; lo stato è nel corpo JSON). Nessun parametro.
+\end{itemize}
+
+% ─── 8. Web UI (Ob. 7) ───────────────────────────────────────────────────────
+
+\section{Web UI}
+
+Il frontend (FastAPI + Jinja2, HTML/CSS) permette di usare l'intera pipeline senza toccare direttamente le API: tutta la logica passa esclusivamente per le REST del backend, e gli errori restituiti sono mostrati chiaramente. È composto da una home page (navigazione, matricole del gruppo, stato del sistema e domini supportati) e da tre sezioni:
+
+\begin{itemize}
+  \item \textbf{Parser \& Evaluation} — testa un parser su un URL (modalità live/local), mostra HTML grezzo e testo pulito e, se l'URL è nel GS, tutte le metriche e il giudizio LLM;
+  \item \textbf{Gold Standard Builder} — costruisce e gestisce il GS nel DB (scarica l'HTML, inserisce il \texttt{gold\_text}, elenca ed elimina le entry esistenti);
+  \item \textbf{Stats} — panoramica aggregata per dominio: conteggi delle tabelle, metriche medie e judge score medio.
+\end{itemize}
+
+% ─── 9. Orchestrazione e Robustezza ──────────────────────────────────────────
+
+\section{Orchestrazione e Robustezza}
+
+\paragraph{Automazione con Makefile.} Un \texttt{Makefile} centralizza i comandi ricorrenti: setup degli ambienti e delle dipendenze, avvio in locale, gestione dello stack Docker (\texttt{up}, \texttt{down}, \texttt{logs}), un target \texttt{reset} che ricrea l'intero stack da zero, e un target \texttt{test} che esegue il grader ufficiale.
+
+\paragraph{Healthcheck e avvio ordinato.} MariaDB e Ollama espongono un healthcheck e diventano \emph{healthy} solo quando sono realmente pronti: MariaDB quando accetta connessioni, Ollama dopo il download del modello \texttt{llama3.2:3b}. Il backend si avvia solo a quel punto, grazie ai \texttt{depends\_on} con \texttt{condition:\ service\_healthy}, e il frontend parte a sua volta dopo il backend. L'avvio è quindi ordinato e il sistema è utilizzabile solo quando tutte le dipendenze lo sono, gestendo anche il primo boot in cui il pull del modello richiede alcuni minuti.
+
+% ─── 10. Extra ───────────────────────────────────────────────────────────────
+
+\section*{Extra}
+
+\paragraph{Similarity Eval.} Oltre alla \texttt{token\_level\_eval} obbligatoria, un secondo gruppo di metriche su vettori di frequenza (\emph{cosine}, \emph{Jaccard}, \emph{excess ratio}) rileva contenuto ridondante non catturato da precision/recall.
+
+\paragraph{Monaco Diff Editor.} La pagina Parser \& Evaluation integra Monaco Editor in modalità diff affiancato, evidenziando le differenze tra testo estratto e Gold Standard (e tra i testi inviati al giudice) per guidare il tuning dei parser.
+
+\paragraph{Overlay di caricamento.} Alcune operazioni (parsing live, valutazione e soprattutto il giudizio LLM) possono richiedere diversi secondi. Per non far percepire l'interfaccia come bloccata, la Web UI mostra un overlay di caricamento all'invio dei form, che migliora l'esperienza utente e previene invii multipli accidentali.
+
+\paragraph{Pre-calcolo all'avvio.} All'avvio del backend vengono pre-calcolate, a partire dall'HTML nel DB, le sole metriche quantitative, escludendo il giudizio LLM: valutare il judge su tutto il Gold Standard richiederebbe oltre 10 minuti. Il \texttt{judge\_score} viene quindi calcolato on demand da \texttt{/full\_gs\_eval}, che ne memorizza il risultato.
+
+\end{document}
