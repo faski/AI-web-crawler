@@ -10,7 +10,13 @@ Templates are rendered from frontend/templates/.
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from .routes import gs_builder_router, index_router, parser_eval_router, stats_router
+from .routes import (
+    gs_builder_router,
+    index_router,
+    llm_runs_router,
+    parser_eval_router,
+    stats_router,
+)
 
 app = FastAPI(title="Creeping Crawler")
 
@@ -20,3 +26,4 @@ app.include_router(index_router)
 app.include_router(parser_eval_router)
 app.include_router(gs_builder_router)
 app.include_router(stats_router)
+app.include_router(llm_runs_router)

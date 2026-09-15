@@ -26,13 +26,17 @@ services:
     ports:
       - "11434:11434"
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    environment:
+      # Drives the pull in entrypoint.sh and the healthcheck below, so the
+      # whole stack follows one setting.
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
     volumes:
       - ./ollama_data/data:/root/.ollama
       - ./ollama_data/entrypoint.sh:/entrypoint.sh
     healthcheck:
       # Healthy only once the model has finished downloading.
       # On the first boot the pull can take a few minutes.
-      test: ["CMD-SHELL", "ollama list | grep -q llama3.2:3b"]
+      test: ["CMD-SHELL", "ollama list | grep -q \"$${OLLAMA_MODEL}\""]
       interval: 10s
       timeout: 5s
       retries: 60
@@ -51,7 +55,24 @@ services:
       DB_USER: creeping_crawler
       DB_PASSWORD: creeping_crawler
       OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODEL: llama3.2:3b
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+      # Left unset, the backend talks to the local Ollama exactly as before.
+      # Set LLM_PROVIDER=openrouter (plus a key) to reach the models that do
+      # not fit in local RAM.
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-180}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-qwen/qwen3.5-9b}
+      OPENROUTER_PROVIDER: ${OPENROUTER_PROVIDER:-}
+      # How much the LLM parser may read and write. The defaults match what
+      # the code assumes on its own, so leaving these unset changes nothing.
+      LLM_PARSER_CONTEXT_TOKENS: ${LLM_PARSER_CONTEXT_TOKENS:-}
+      LLM_PARSER_MAX_TOKENS: ${LLM_PARSER_MAX_TOKENS:-}
+      # Off by default: a page that does not fit is reported as too long
+      # rather than read in pieces, which is what every recorded run did.
+      LLM_PARSER_CHUNKING: ${LLM_PARSER_CHUNKING:-0}
+      LLM_EUR_PER_USD: ${LLM_EUR_PER_USD:-}
     depends_on:
       mariadb:
         condition: service_healthy

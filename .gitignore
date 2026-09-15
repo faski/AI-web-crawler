@@ -15,3 +15,12 @@ ollama_data/data/
 
 # Report output
 output/
+
+# Documenti personali di studio e consegna: utili a me, non parte del progetto
+creeping-crawler-colloquio.pdf
+creeping-crawler-colloquio.tex
+creeping-crawler-file-del-commit.pdf
+creeping-crawler-file-del-commit.tex
+
+# Traccia d'esame: materiale del corso, non codice del progetto
+docs/B - Presentazione Progetto Finale*.pdf

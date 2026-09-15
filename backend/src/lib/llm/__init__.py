@@ -1,7 +1,8 @@
-"""LLM-as-Judge: evaluate parser output quality using an Ollama-hosted model.
+"""LLM-as-Judge: evaluate parser output quality using an LLM.
 
 Modules:
-  client    HTTP client for the Ollama API (generate + ping)
+  client    HTTP client for the LLM providers, Ollama or OpenRouter
+            (generate + ping)
   prompt    builds the judge prompt from parsed_text and gold_text
   judge     high-level wrapper with JSON fallback handling
   models    Pydantic model for the judge result

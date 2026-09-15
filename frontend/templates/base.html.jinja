@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ stylesheet_version }}">
 </head>
 <body>
 
@@ -19,6 +19,7 @@
   <nav class="nav-links">
     <a href="/parser" class="{% if request.url.path.startswith('/parser') %}active{% endif %}">Parser &amp; Evaluation</a>
     <a href="/gs-builder" class="{% if request.url.path.startswith('/gs-builder') %}active{% endif %}">Gold Standard</a>
+    <a href="/llm-runs" class="{% if request.url.path.startswith('/llm-runs') %}active{% endif %}">Parser LLM</a>
     <a href="/stats" class="{% if request.url.path == '/stats' %}active{% endif %}">Stats</a>
   </nav>
 </header>

@@ -1,0 +1,326 @@
+{% extends "base.html.jinja" %}
+{% block title %} — Parser LLM{% endblock %}
+
+{% macro num(value, digits=3) %}{% if value is none %}—{% else %}{{ '%.*f'|format(digits, value) }}{% endif %}{% endmacro %}
+
+{% macro delta(a, b) %}
+  {% if a is none or b is none %}
+    <span class="delta-nil">—</span>
+  {% elif (b - a)|abs < 0.001 %}
+    <span class="delta-nil">0.000</span>
+  {% else %}
+    <span class="{{ 'delta-pos' if b > a else 'delta-neg' }}">{{ '%+.3f'|format(b - a) }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro status_pill(value) %}
+  {% if value == 'ok' %}<span class="pill pill-ok">ok</span>
+  {% elif value == 'too_long' %}<span class="pill pill-skip">fuori contesto</span>
+  {% elif value == 'error' %}<span class="pill pill-err">errore</span>
+  {% else %}<span class="delta-nil">—</span>{% endif %}
+{% endmacro %}
+
+{% macro calls_label(run) -%}
+  {%- if not run.calls %}<span class="delta-nil">&mdash;</span>
+  {%- elif run.chunked_pages %}{{ run.calls }} per {{ run.ok }} pagine
+    <span class="pill pill-skip" title="pagine lette a pezzi perché non entravano nel contesto">{{ run.chunked_pages }} a pezzi</span>
+  {%- else %}{{ run.calls }} (una per pagina)
+  {%- endif %}
+{%- endmacro %}
+
+{% macro cost_label(run) -%}
+  {%- if not run.cost_eur %}<span class="delta-nil" title="modello in locale, nessun importo fatturato">&mdash;</span>
+  {%- elif run.cost_is_aggregate %}&euro; {{ '%.4f'|format(run.cost_eur) }}
+    <span class="delta-nil">(totale della run, senza dettaglio per chiamata)</span>
+  {%- else %}&euro; {{ '%.4f'|format(run.cost_eur) }}
+    <span class="delta-nil">(&euro; {{ '%.5f'|format(run.cost_eur / run.calls) }} a chiamata)</span>
+  {%- endif %}
+{%- endmacro %}
+
+
+
+{% block content %}
+<h1 class="page-title">Parser LLM contro Crawl4AI</h1>
+<p class="page-sub">
+  Le due pipeline ricevono lo <strong>stesso HTML</strong> e il risultato di entrambe viene
+  misurato contro lo stesso gold standard, su tre assi: <strong>qualit&agrave;</strong> (F1),
+  <strong>velocit&agrave;</strong> (secondi per pagina) e <strong>risorse</strong>.
+</p>
+
+<div class="note-box">
+  Questa pagina <strong>legge solo dal database</strong>: aprirla o ricaricarla non esegue
+  nessun modello e non consuma credito. Le run si eseguono da riga di comando con
+  <code>scripts/run_llm_eval.py</code> (OpenRouter solo con il flag esplicito
+  <code>--openrouter</code>) e si caricano con <code>scripts/import_llm_run.py</code>.
+</div>
+
+{% if not runs %}
+  <p class="page-sub">Nessuna run salvata. Importane una con
+  <code>python scripts/import_llm_run.py output/&lt;file&gt;.json</code>.</p>
+{% else %}
+
+<div class="stats-table-wrap">
+  <table class="stats-table table-dense">
+    <thead>
+      <tr>
+        <th>Run</th>
+        <th>Modello</th>
+        <th>Condizione</th>
+        <th>Pagine</th>
+        <th>Prec.</th>
+        <th>Rec.</th>
+        <th>F1</th>
+        <th>Excess</th>
+        <th>Sec/pag</th>
+        <th>Risorse</th>
+        <th>Costo</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td>
+          <span class="run-name">
+            <strong>{{ run.label }}</strong>
+            <span>{{ run.created_at[:16] }}</span>
+          </span>
+        </td>
+        <td>
+          <span class="chip {{ 'chip-remote' if run.provider == 'openrouter' else 'chip-local' }}"
+                title="provider: {{ run.provider }}">{{ run.model_name }}</span>
+        </td>
+        <td>{{ run.condition_name }}</td>
+        <td>
+          {{ run.ok }} ok
+          {%- if run.too_long %} · <span class="pill pill-skip">{{ run.too_long }} fuori</span>{% endif %}
+          {%- if run.errors %} · <span class="pill pill-err">{{ run.errors }} err</span>{% endif %}
+        </td>
+        <td>{{ num(run.precision) }}</td>
+        <td>{{ num(run.recall) }}</td>
+        <td><strong>{{ num(run.f1) }}</strong></td>
+        <td>{{ num(run.excess_ratio) }}</td>
+        <td>{{ '%.2f'|format(run.seconds) if run.seconds is not none and run.seconds < 10 else num(run.seconds, 0) }}</td>
+        <td>
+          {% if run.input_tokens %}
+            <span title="{% if run.skipped_tokens %}Escluse le pagine fuori contesto, mai inviate: {{ '{:,}'.format(run.skipped_tokens) }} token{% else %}Tutte le pagine sono state inviate{% endif %}">
+              {{ '{:,}'.format(run.input_tokens) }} token
+            </span>
+          {% elif run.cpu_seconds %}
+            <span title="Tempo di CPU sommato su tutte le pagine">{{ '%.1f'|format(run.cpu_seconds) }} s CPU</span>
+          {% else %}<span class="delta-nil">—</span>{% endif %}
+          {%- if run.chunked_pages %}
+            <br><span class="pill pill-skip"
+                      title="{{ run.chunked_pages }} pagine non entravano nel contesto e sono state lette a pezzi: {{ run.calls }} chiamate al modello per {{ run.ok }} pagine">
+              {{ run.calls }} chiamate, {{ run.chunked_pages }} pagine a pezzi</span>
+          {%- endif %}
+        </td>
+        <td>
+          {% if run.cost_eur %}
+            <span title="{% if run.cost_is_aggregate %}Totale della run letto dal saldo del provider: questa run e' precedente al conteggio per chiamata, quindi non c'e' una ripartizione per pagina{% else %}Fatturato dal provider, chiamata per chiamata. Media: EUR {{ '%.5f'|format(run.cost_eur / run.calls) }}{% endif %}">
+              &euro; {{ '%.4f'|format(run.cost_eur) }}{% if run.cost_is_aggregate %}<span class="delta-nil"> tot.</span>{% endif %}
+            </span>
+          {% else %}<span class="delta-nil" title="Modello in locale: non c'e' un importo fatturato, il costo si legge nei secondi di CPU">&mdash;</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="section-sub" style="margin-top:0.6rem">
+  Le medie considerano solo le pagine effettivamente estratte; quelle fuori contesto sono
+  contate a parte e i loro token non compaiono fra quelli inviati. Le due pipeline
+  <strong>spendono risorse diverse e non sommabili</strong>: Crawl4AI consuma CPU locale e
+  zero token, un LLM remoto consuma token e zero CPU locale.
+</p>
+
+<h2 class="section-title">Confronto fra due run</h2>
+<form method="get" action="/llm-runs" class="form-row">
+  <div class="field">
+    <label for="left">Run A</label>
+    <select id="left" name="left">
+      {% for run in runs %}
+      <option value="{{ run.id }}" {% if run.id == left %}selected{% endif %}>{{ run.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="right">Run B</label>
+    <select id="right" name="right">
+      {% for run in runs %}
+      <option value="{{ run.id }}" {% if run.id == right %}selected{% endif %}>{{ run.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field field-mode">
+    <label>&nbsp;</label>
+    <button type="submit" class="btn-primary">Confronta</button>
+  </div>
+</form>
+
+{% if left == right %}
+  <div class="note-box">Scegli due run diverse: confrontare una run con sé stessa non mostra nulla.</div>
+{% elif not comparison %}
+  <div class="note-box">Nessun dato da confrontare per queste due run.</div>
+{% else %}
+
+<p class="section-sub">
+  <span class="pill" style="background:var(--bordeaux-soft);color:var(--bordeaux)">A</span>
+  {{ left_run.label }} — {{ left_run.condition_name }}
+  &nbsp;·&nbsp;
+  <span class="pill" style="background:var(--gold-soft);color:#8a6d0b">B</span>
+  {{ right_run.label }} — {{ right_run.condition_name }}
+  <br>
+  La colonna <em>Diff</em> è B meno A: <span class="delta-pos">verde</span> se B fa meglio,
+  <span class="delta-neg">rosso</span> se fa meglio A.
+</p>
+
+<div class="stats-table-wrap" style="margin-bottom:1.25rem">
+  <table class="stats-table table-dense">
+    <thead>
+      <tr><th>Asse</th>
+          <th class="cmp-group-a">A — {{ left_run.label }}</th>
+          <th class="cmp-group-b">B — {{ right_run.label }}</th>
+          <th>Rapporto</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="domain-cell">Qualit&agrave; (F1 medio)</td>
+        <td>{{ num(left_run.f1) }}</td>
+        <td>{{ num(right_run.f1) }}</td>
+        <td>{{ delta(left_run.f1, right_run.f1) }}</td>
+      </tr>
+      <tr>
+        <td class="domain-cell">Copertura (pagine estratte)</td>
+        <td>{{ left_run.ok }}/{{ left_run.ok + left_run.too_long + left_run.errors }}</td>
+        <td>{{ right_run.ok }}/{{ right_run.ok + right_run.too_long + right_run.errors }}</td>
+        <td>{% if right_run.ok == left_run.ok %}<span class="delta-nil">pari</span>
+            {% else %}<span class="{{ 'delta-pos' if right_run.ok > left_run.ok else 'delta-neg' }}">{{ '%+d'|format(right_run.ok - left_run.ok) }}</span>{% endif %}</td>
+      </tr>
+      <tr>
+        <td class="domain-cell">Velocit&agrave; (secondi per pagina)</td>
+        <td>{{ '%.2f'|format(left_run.seconds) if left_run.seconds is not none }}</td>
+        <td>{{ '%.2f'|format(right_run.seconds) if right_run.seconds is not none }}</td>
+        <td>
+          {% if left_run.seconds and right_run.seconds %}
+            {% set ratio = left_run.seconds / right_run.seconds %}
+            <span class="{{ 'delta-pos' if ratio > 1 else 'delta-neg' }}">
+              B {{ '%.0f'|format(ratio if ratio > 1 else 1 / ratio) }}&times; {{ "più veloce" if ratio > 1 else "più lenta" }}
+            </span>
+          {% else %}<span class="delta-nil">—</span>{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td class="domain-cell">Risorse</td>
+        <td>{% if left_run.input_tokens %}{{ '{:,}'.format(left_run.input_tokens) }} token{% elif left_run.cpu_seconds %}{{ '%.1f'|format(left_run.cpu_seconds) }} s CPU{% else %}—{% endif %}</td>
+        <td>{% if right_run.input_tokens %}{{ '{:,}'.format(right_run.input_tokens) }} token{% elif right_run.cpu_seconds %}{{ '%.1f'|format(right_run.cpu_seconds) }} s CPU{% else %}—{% endif %}</td>
+        <td><span class="delta-nil">grandezze diverse</span></td>
+      </tr>
+      <tr>
+        <td class="domain-cell">Costo (&euro;)</td>
+        <td>{{ cost_label(left_run) }}</td>
+        <td>{{ cost_label(right_run) }}</td>
+        <td>
+          {% if left_run.cost_eur and right_run.cost_eur %}
+            {% set ratio = left_run.cost_eur / right_run.cost_eur %}
+            <span class="{{ 'delta-pos' if ratio > 1 else 'delta-neg' }}">B {{ '%.1f'|format(ratio if ratio > 1 else 1 / ratio) }}&times; {{ "più economica" if ratio > 1 else "più cara" }}</span>
+          {% else %}<span class="delta-nil">grandezze diverse</span>{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td class="domain-cell">Chiamate al modello</td>
+        <td>{{ calls_label(left_run) }}</td>
+        <td>{{ calls_label(right_run) }}</td>
+        <td>
+          {% if left_run.calls and right_run.calls and left_run.calls != right_run.calls %}
+            <span class="{{ 'delta-pos' if right_run.calls < left_run.calls else 'delta-neg' }}">{{ '%+d'|format(right_run.calls - left_run.calls) }}</span>
+          {% else %}<span class="delta-nil">—</span>{% endif %}
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+{% if by_domain.left %}
+{% set right_by_domain = {} %}
+{% for row in by_domain.right %}{% set _ = right_by_domain.update({row.domain: row}) %}{% endfor %}
+<div class="stats-table-wrap">
+  <table class="stats-table table-dense">
+    <thead>
+      <tr>
+        <th rowspan="2">Dominio</th>
+        <th colspan="3" class="cmp-group-a">A — {{ left_run.condition_name }}</th>
+        <th colspan="3" class="cmp-group-b">B — {{ right_run.condition_name }}</th>
+        <th rowspan="2">Diff F1</th>
+      </tr>
+      <tr>
+        <th class="cmp-group-a">Pagine</th><th class="cmp-group-a">F1</th><th class="cmp-group-a">Sec</th>
+        <th class="cmp-group-b">Pagine</th><th class="cmp-group-b">F1</th><th class="cmp-group-b">Sec</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in by_domain.left %}
+      {% set other = right_by_domain.get(row.domain) %}
+      <tr>
+        <td class="domain-cell">{{ row.domain }}</td>
+        <td>{{ row.ok }}{% if row.too_long %} <span class="pill pill-skip">+{{ row.too_long }}</span>{% endif %}</td>
+        <td>{{ num(row.f1) }}</td>
+        <td>{{ '%.2f'|format(row.seconds) if row.seconds is not none else '—' }}</td>
+        <td>{{ other.ok if other else '—' }}{% if other and other.too_long %} <span class="pill pill-skip">+{{ other.too_long }}</span>{% endif %}</td>
+        <td>{{ num(other.f1 if other else none) }}</td>
+        <td>{{ '%.2f'|format(other.seconds) if other and other.seconds is not none else '—' }}</td>
+        <td>{{ delta(row.f1, other.f1 if other else none) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<h2 class="section-title">Pagina per pagina</h2>
+<p class="section-sub">
+  Ordinate per differenza di F1: in cima quelle dove le due condizioni divergono di più,
+  comprese quelle che una sola delle due è riuscita a estrarre.
+</p>
+<div class="stats-table-wrap">
+  <table class="stats-table table-dense">
+    <thead>
+      <tr>
+        <th class="url-cell">Pagina</th>
+        <th class="cmp-group-a">Stato A</th>
+        <th class="cmp-group-a">F1 A</th>
+        <th class="cmp-group-a">Token A</th>
+        <th class="cmp-group-b">Stato B</th>
+        <th class="cmp-group-b">F1 B</th>
+        <th class="cmp-group-b">Token B</th>
+        <th>Diff</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in comparison %}
+      <tr>
+        <td class="url-cell" title="{{ row.url }}">
+          <code>{{ row.url|replace('https://','') }}</code>
+          <a class="row-link" href="/llm-runs/text?left={{ left }}&amp;right={{ right }}&amp;url={{ row.url|urlencode }}">vedi i testi &rarr;</a>
+          <span class="bar">
+            <span class="bar-fill bar-a" style="width: {{ ((row.left_f1 or 0) * 100)|round(1) }}%"></span>
+          </span>
+          <span class="bar" style="margin-top:2px">
+            <span class="bar-fill bar-b" style="width: {{ ((row.right_f1 or 0) * 100)|round(1) }}%"></span>
+          </span>
+        </td>
+        <td>{{ status_pill(row.left_status) }}</td>
+        <td>{{ num(row.left_f1) }}</td>
+        <td>{{ '{:,}'.format(row.left_tokens) if row.left_tokens else '—' }}</td>
+        <td>{{ status_pill(row.right_status) }}</td>
+        <td>{{ num(row.right_f1) }}</td>
+        <td>{{ '{:,}'.format(row.right_tokens) if row.right_tokens else '—' }}</td>
+        <td>{{ delta(row.left_f1, row.right_f1) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endif %}
+{% endif %}
+{% endblock %}

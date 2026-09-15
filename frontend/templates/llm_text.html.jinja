@@ -1,0 +1,105 @@
+{% extends "base.html.jinja" %}
+{% block title %} — Testi a confronto{% endblock %}
+
+{% macro num(value, digits=3) %}{% if value is none %}—{% else %}{{ '%.*f'|format(digits, value) }}{% endif %}{% endmacro %}
+
+{% macro stat(label, value, strong=False) %}
+<div class="diff-stat{{ ' is-key' if strong else '' }}">
+  <span>{{ label }}</span><b>{{ value }}</b>
+</div>
+{% endmacro %}
+
+{% macro side_info(side, badge, css) %}
+<div class="diff-side {{ css }}">
+  <div class="diff-side-top">
+    <span class="diff-badge">{{ badge }}</span>
+    <div class="diff-side-id">
+      <div class="diff-side-title">{{ side.label }}</div>
+      <div class="diff-side-meta">
+        <span class="chip {{ 'chip-remote' if '/' in side.model_name else 'chip-local' }}">{{ side.model_name }}</span>
+        <span>{{ side.condition_name }}</span>
+      </div>
+    </div>
+  </div>
+  {% if side.status == 'ok' %}
+  <div class="diff-stats">
+    {{ stat('F1', num(side.f1), True) }}
+    {{ stat('Precision', num(side.precision)) }}
+    {{ stat('Recall', num(side.recall)) }}
+    {{ stat('Excess', num(side.excess_ratio)) }}
+    {{ stat('Caratteri', '{:,}'.format(side.parsed_text|length)|replace(',', '.')) }}
+    {{ stat('Secondi', '%.2f'|format(side.seconds) if side.seconds is not none else '—') }}
+  </div>
+  {% else %}
+  <div class="diff-stats">
+    {% if side.status == 'too_long' %}
+      <span class="pill pill-skip">fuori contesto — pagina mai elaborata</span>
+    {% else %}
+      <span class="pill pill-err">estrazione non riuscita</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% block content %}
+<a class="link-back" href="/llm-runs?left={{ left }}&amp;right={{ right }}">&larr; Torna al confronto</a>
+
+<h1 class="page-title">Testi a confronto</h1>
+<p class="page-sub"><code>{{ url }}</code></p>
+
+{% if not data or not data.left or not data.right %}
+  <p class="page-sub">Una delle due run non ha un testo salvato per questa pagina.</p>
+{% else %}
+
+<section class="diff-section">
+  <div class="diff-legend">
+    {{ side_info(data.left, 'A', 'diff-side-a') }}
+    {{ side_info(data.right, 'B', 'diff-side-b') }}
+  </div>
+  <div id="monaco-diff" style="height:680px;"></div>
+</section>
+
+<p class="section-sub">
+  A sinistra il Markdown prodotto da <strong>{{ data.left.label }}</strong>, a destra quello di
+  <strong>{{ data.right.label }}</strong>. I blocchi di righe identiche sono compressi: si
+  vedono solo i punti in cui le due estrazioni divergono.
+</p>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if data and data.left and data.right %}
+<script>
+  var __leftText  = {{ data.left.parsed_text | tojson }};
+  var __rightText = {{ data.right.parsed_text | tojson }};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
+<script>
+  require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs' } });
+
+  require(['vs/editor/editor.main'], function () {
+    monaco.editor.createDiffEditor(document.getElementById('monaco-diff'), {
+      readOnly: true,
+      renderSideBySide: true,
+      automaticLayout: true,
+      theme: 'vs',
+      fontSize: 12.5,
+      wordWrap: 'on',
+      diffWordWrap: 'on',
+      scrollBeyondLastLine: false,
+      selectionHighlight: false,
+      occurrencesHighlight: 'off',
+      renderLineHighlight: 'none',
+      // Collapses the runs of identical lines: on a long page only the points
+      // where the two extractions differ stay on screen.
+      hideUnchangedRegions: { enabled: true, contextLineCount: 2, minimumLineCount: 4 }
+    }).setModel({
+      original: monaco.editor.createModel(__leftText, 'markdown'),
+      modified: monaco.editor.createModel(__rightText, 'markdown')
+    });
+  });
+</script>
+{% endif %}
+{% endblock %}

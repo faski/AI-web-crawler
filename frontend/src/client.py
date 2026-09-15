@@ -160,3 +160,53 @@ def delete_gold_standard(url: str) -> tuple[bool, str | None]:
         return False, response.json().get("detail", f"Backend error {response.status_code}")
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as error:
         raise BackendUnavailable() from error
+
+
+# ─── LLM parser runs ─────────────────────────────────────────────────────────
+# These endpoints only read rows a finished run already wrote. No model is
+# called, so opening the page costs nothing whichever provider is configured.
+
+def get_llm_runs() -> list[dict]:
+    """Return every stored LLM-parser run with its headline numbers."""
+    try:
+        return requests.get(f"{BACKEND}/llm_runs", timeout=SHORT_TIMEOUT).json()
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as error:
+        raise BackendUnavailable() from error
+
+
+def get_llm_run_domains(run_id: int) -> list[dict]:
+    """Return the per-domain averages of one run."""
+    try:
+        response = requests.get(
+            f"{BACKEND}/llm_runs/{run_id}/domains", timeout=SHORT_TIMEOUT
+        )
+        return response.json() if response.status_code == 200 else []
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as error:
+        raise BackendUnavailable() from error
+
+
+def compare_llm_runs(left_id: int, right_id: int) -> list[dict]:
+    """Return the pages of two runs side by side."""
+    try:
+        response = requests.get(
+            f"{BACKEND}/llm_runs/compare",
+            params={"left": left_id, "right": right_id},
+            timeout=SHORT_TIMEOUT,
+        )
+        return response.json() if response.status_code == 200 else []
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as error:
+        raise BackendUnavailable() from error
+
+
+def compare_llm_text(left_id: int, right_id: int, url: str) -> dict:
+    """Return the text two runs produced for one page, next to the gold text."""
+    try:
+        response = requests.get(
+            f"{BACKEND}/llm_runs/compare_text",
+            params={"left": left_id, "right": right_id, "url": url},
+            timeout=PARSE_TIMEOUT,
+        )
+        return response.json() if response.status_code == 200 else {}
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as error:
+        raise BackendUnavailable() from error
+

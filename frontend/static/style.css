@@ -576,3 +576,140 @@ textarea { font-family: var(--mono); font-size: 0.88rem; resize: vertical; }
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
+
+/* ─── Parser LLM: run e confronto ──────────────────────────────────────── */
+
+/* Tabelle larghe: righe più compatte e numeri incolonnati con cifre di
+   larghezza fissa, così le colonne non ballano fra una riga e l'altra. */
+.table-dense th, .table-dense td { padding: 0.55rem 0.7rem; font-size: 0.86rem; }
+.table-dense td { font-variant-numeric: tabular-nums; }
+
+.run-name { display: flex; flex-direction: column; gap: 0.1rem; text-align: left; }
+.run-name strong { font-weight: 600; }
+.run-name span { font-size: 0.76rem; color: var(--text-muted); font-family: inherit; }
+
+/* Il nome del modello non deve andare a capo in mezzo allo slash. */
+.chip {
+  display: inline-block;
+  white-space: nowrap;
+  padding: 0.15rem 0.45rem;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+.chip-remote { background: var(--gold-soft); border-color: #e8dca8; }
+.chip-local { background: var(--bordeaux-soft); border-color: #f0d7de; }
+
+.pill {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-family: inherit;
+}
+.pill-ok { background: #e8f3ec; color: var(--ok); }
+.pill-skip { background: var(--gold-soft); color: var(--warn); }
+.pill-err { background: #fbeae9; color: var(--bad); }
+
+.delta-pos { color: var(--ok); font-weight: 600; }
+.delta-neg { color: var(--bad); font-weight: 600; }
+.delta-nil { color: var(--text-muted); }
+
+/* Intestazioni del confronto: due gruppi distinti sopra le colonne. */
+.cmp-group-a { background: var(--bordeaux-soft) !important; color: var(--bordeaux); }
+.cmp-group-b { background: var(--gold-soft) !important; color: #8a6d0b; }
+
+.section-title {
+  margin: 2.25rem 0 0.35rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+.section-sub { margin: 0 0 1rem; color: var(--text-soft); font-size: 0.92rem; }
+
+.note-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--gold);
+  border-radius: var(--radius);
+  padding: 0.8rem 1rem;
+  margin: 0 0 1.25rem;
+  font-size: 0.92rem;
+  color: var(--text-soft);
+}
+
+/* La barretta rende visibile a colpo d'occhio dove le due run divergono. */
+.bar { display: block; height: 4px; border-radius: 2px; background: var(--border); }
+.bar-fill { display: block; height: 100%; border-radius: 2px; }
+.bar-a { background: var(--bordeaux); }
+.bar-b { background: var(--gold); }
+.url-cell { text-align: left !important; max-width: 27rem; }
+.url-cell code { font-size: 0.78rem; word-break: break-all; }
+
+/* Nell'intestazione a due righe del confronto la prima cella della seconda
+   riga non è la colonna descrittiva, quindi non va allineata a sinistra come
+   farebbe la regola generale su th:first-child. */
+.stats-table thead tr + tr th:first-child { text-align: right; }
+
+/* ─── Diff dei testi prodotti ──────────────────────────────────────────── */
+
+/* Le due intestazioni stanno sopra le rispettive metà del diff, così si
+   legge quale pipeline è quale senza spostare lo sguardo. */
+.diff-legend { display: grid; grid-template-columns: 1fr 1fr; }
+.diff-side { padding: 0.85rem 1rem; border-bottom: 1px solid var(--border); }
+.diff-side + .diff-side { border-left: 1px solid var(--border); }
+.diff-side-a { background: linear-gradient(var(--bordeaux-soft), var(--surface)); }
+.diff-side-b { background: linear-gradient(var(--gold-soft), var(--surface)); }
+
+.diff-side-top { display: flex; align-items: flex-start; gap: 0.6rem; }
+.diff-badge {
+  flex-shrink: 0;
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #fff;
+}
+.diff-side-a .diff-badge { background: var(--bordeaux); }
+.diff-side-b .diff-badge { background: #a8830f; }
+.diff-side-id { min-width: 0; }
+.diff-side-title { font-weight: 600; font-size: 0.95rem; line-height: 1.3; }
+.diff-side-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* Le metriche come celle etichettate: incolonnate e leggibili a colpo
+   d'occhio, invece che come una frase di numeri in fila. */
+.diff-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.4rem;
+  margin-top: 0.7rem;
+}
+.diff-stat { display: flex; flex-direction: column; line-height: 1.25; }
+.diff-stat span {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.diff-stat b {
+  font-family: var(--mono);
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.diff-stat.is-key b { font-size: 1.05rem; font-weight: 700; }
+
+.link-back { display: inline-block; margin-bottom: 1rem; font-size: 0.88rem; }
+.row-link { font-size: 0.78rem; }

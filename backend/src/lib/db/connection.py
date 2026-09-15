@@ -81,32 +81,42 @@ def get_connection() -> mariadb.Connection:
 def fetch_one(sql: str, params: tuple = ()):
     """Run a SELECT and return the first row (or None)."""
     connection = get_connection()
-    query = connection.cursor()
-    query.execute(sql, params)
-    row = query.fetchone()
-    connection.close()
-    return row
+    try:
+        query = connection.cursor()
+        query.execute(sql, params)
+        return query.fetchone()
+    finally:
+        connection.close()
 
 
 def fetch_all(sql: str, params: tuple = ()) -> list:
     """Run a SELECT and return all the rows."""
     connection = get_connection()
-    query = connection.cursor()
-    query.execute(sql, params)
-    rows = query.fetchall()
-    connection.close()
-    return rows
+    try:
+        query = connection.cursor()
+        query.execute(sql, params)
+        return query.fetchall()
+    finally:
+        connection.close()
 
 
 def execute(sql: str, params: tuple = ()) -> int:
-    """Run an INSERT/UPDATE/DELETE, save the changes and return how many rows changed."""
+    """Run an INSERT/UPDATE/DELETE, save the changes and return how many rows changed.
+
+    The connection goes back to the pool even when the statement fails.
+    Without that, a caller that expects some statements to fail - the schema
+    migrations do, since re-adding an existing column is the normal outcome -
+    drains the pool one failure at a time until nothing can reach the
+    database any more.
+    """
     connection = get_connection()
-    command = connection.cursor()
-    command.execute(sql, params)
-    connection.commit()
-    changed = command.rowcount
-    connection.close()
-    return changed
+    try:
+        command = connection.cursor()
+        command.execute(sql, params)
+        connection.commit()
+        return command.rowcount
+    finally:
+        connection.close()
 
 
 def ping() -> bool:
