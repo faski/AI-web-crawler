@@ -30,6 +30,10 @@ services:
       # Drives the pull in entrypoint.sh and the healthcheck below, so the
       # whole stack follows one setting.
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+      # The judge has its own, smaller model: it runs on every load of the
+      # /parser page, and pinning the parser's model there made that page
+      # time out on a machine this size.
+      OLLAMA_JUDGE_MODEL: ${OLLAMA_JUDGE_MODEL:-llama3.2:3b}
     volumes:
       - ./ollama_data/data:/root/.ollama
       - ./ollama_data/entrypoint.sh:/entrypoint.sh
@@ -56,6 +60,14 @@ services:
       DB_PASSWORD: creeping_crawler
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+      # The judge scores extractions on every load of the /parser page, so it
+      # gets the smallest model that can give a verdict rather than the one
+      # the parser needs. Sharing the parser's model made that page time out.
+      OLLAMA_JUDGE_MODEL: ${OLLAMA_JUDGE_MODEL:-llama3.2:3b}
+      # Left unset, Ollama unloads an idle model after a few minutes. Pinning
+      # it (keep_alive -1) held over half of this machine's Docker memory for
+      # good and made every other call crawl.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-}
       # Left unset, the backend talks to the local Ollama exactly as before.
       # Set LLM_PROVIDER=openrouter (plus a key) to reach the models that do
       # not fit in local RAM.

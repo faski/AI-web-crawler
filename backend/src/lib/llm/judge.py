@@ -37,7 +37,18 @@ def evaluate_with_judge(parsed_text: str, gold_text: str) -> JudgeResult:
     Markdown is stripped from both inputs so the judge compares content only.
     """
     prompt = build_judge_prompt(strip_markdown(parsed_text), strip_markdown(gold_text))
-    raw_response = client.generate(prompt, response_format=JUDGE_SCHEMA)
+    # The judge runs on its own model: it is called on every load of the
+    # /parser page, so it wants the smallest model that can give a verdict,
+    # not the one the parser needs.
+    raw_response = client.generate(
+        prompt,
+        response_format=JUDGE_SCHEMA,
+        model=client.get_judge_model_name(),
+        # Ollama's own default window, not the parser's: the judge prompt is
+        # capped at MAX_TEXT_CHARS per side and never comes close to filling
+        # a large one, which would only reserve memory nothing writes into.
+        num_ctx=0,
+    )
     return _parse_judge_response(raw_response)
 
 
@@ -63,7 +74,7 @@ def _parse_judge_response(raw_response: str) -> JudgeResult:
 
     score = max(1, min(5, score))
     return JudgeResult(
-        model_name=client.get_model_name(),
+        model_name=client.get_judge_model_name(),
         judge_score=score,
         judge_feedback=feedback,
     )
@@ -72,7 +83,7 @@ def _parse_judge_response(raw_response: str) -> JudgeResult:
 def _fallback_result(feedback: str) -> JudgeResult:
     """Build a default JudgeResult with score 1 and a diagnostic feedback."""
     return JudgeResult(
-        model_name=client.get_model_name(),
+        model_name=client.get_judge_model_name(),
         judge_score=1,
         judge_feedback=feedback,
     )

@@ -83,7 +83,7 @@ def get_model_name() -> str:
     """
     if _provider() == "openrouter":
         return os.environ.get("OPENROUTER_MODEL", "qwen/qwen3.5-9b")
-    return os.environ.get("OLLAMA_MODEL", "qwen3.5:4b")
+    return os.environ.get("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
 
 
 @dataclass(frozen=True)
@@ -111,6 +111,8 @@ def generate(
     prompt: str,
     response_format: dict | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    model: str | None = None,
+    num_ctx: int | None = None,
 ) -> str:
     """Send a prompt to the active provider and return the raw text response.
 
@@ -121,19 +123,25 @@ def generate(
             JSON object.
         max_tokens:      cap on the generated length. The default suits the
             judge; a caller that needs a whole page of markdown must raise it.
+        model:           use this local model instead of the configured one.
+            Ignored on OpenRouter, where there is a single configured model.
+        num_ctx:         local context window to ask for. 0 means "let Ollama
+            choose"; omitted means "whatever OLLAMA_NUM_CTX says".
 
     Raises:
         RuntimeError: if the provider name is unknown, or the OpenRouter key
             is missing.
         requests.HTTPError: if the provider returns an error status.
     """
-    return generate_with_usage(prompt, response_format, max_tokens)[0]
+    return generate_with_usage(prompt, response_format, max_tokens, model, num_ctx)[0]
 
 
 def generate_with_usage(
     prompt: str,
     response_format: dict | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    model: str | None = None,
+    num_ctx: int | None = None,
 ) -> tuple[str, Usage]:
     """Send a prompt and return the text together with what the call consumed.
 
@@ -146,7 +154,7 @@ def generate_with_usage(
     if _provider() == "openrouter":
         return _generate_openrouter(prompt, response_format, max_tokens)
     if _provider() == "ollama":
-        return _generate_ollama(prompt, response_format, max_tokens)
+        return _generate_ollama(prompt, response_format, max_tokens, model, num_ctx)
     raise RuntimeError(f"Unknown LLM_PROVIDER: {_provider()!r}")
 
 
@@ -203,43 +211,80 @@ def _post_json(
 # --- Ollama ------------------------------------------------------------------
 
 
-def _ollama_config() -> dict:
-    """Read the Ollama host and model from the environment."""
+DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
+
+# The judge scores extractions; the parser produces them. They do not have to
+# be the same model, and on a machine this size they should not be: the judge
+# runs on every page load of /parser, so it wants the smallest model that can
+# give a verdict, while the parser wants the strongest one that fits. Kept as
+# its own default so the judge's scores stay comparable with the ones the base
+# project recorded.
+DEFAULT_JUDGE_MODEL = "llama3.2:3b"
+
+
+def get_judge_model_name() -> str:
+    """Return the model the judge should use, for the active provider.
+
+    On OpenRouter there is one model and the judge shares it. Locally the
+    judge has its own, because the two jobs have opposite requirements.
+    """
+    if _provider() == "openrouter":
+        return get_model_name()
+    return os.environ.get("OLLAMA_JUDGE_MODEL", DEFAULT_JUDGE_MODEL)
+
+
+def _ollama_config(model: str | None = None) -> dict:
+    """Read the Ollama host and model from the environment.
+
+    ``model`` overrides the configured one, for a caller that needs a
+    different model from the one the stack parses with.
+    """
     return {
         "host": os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-        "model": os.environ.get("OLLAMA_MODEL", "qwen3.5:4b"),
+        "model": model or os.environ.get("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL),
     }
 
 
-def _ollama_options(max_tokens: int) -> dict:
+def _ollama_options(max_tokens: int, num_ctx: int | None = None) -> dict:
     """Build the Ollama options block.
 
-    ``num_ctx`` is only sent when OLLAMA_NUM_CTX is set, so the default request
-    stays identical to the one the base project used. Setting it matters for
-    long inputs: Ollama silently drops whatever does not fit in the context
-    window instead of reporting an error, so a prompt longer than the default
-    window is truncated without any warning.
+    ``num_ctx`` is only sent when asked for, so the default request stays
+    identical to the one the base project used. Setting it matters for long
+    inputs: Ollama silently drops whatever does not fit in the context window
+    instead of reporting an error, so a prompt longer than the default window
+    is truncated without any warning.
+
+    It also costs memory. The window is allocated whether or not the prompt
+    fills it, so a caller with a short prompt must not inherit the parser's
+    setting: on this stack that turned a 2.9 GB judge model into a 4.4 GB one
+    for a prompt of under a thousand tokens.
     """
     options = {"temperature": 0, "num_predict": max_tokens}
-    num_ctx = os.environ.get("OLLAMA_NUM_CTX")
-    if num_ctx:
-        options["num_ctx"] = int(num_ctx)
+    configured = num_ctx if num_ctx is not None else os.environ.get("OLLAMA_NUM_CTX")
+    if configured:
+        options["num_ctx"] = int(configured)
     return options
 
 
 def _generate_ollama(
-    prompt: str, response_format: dict | None, max_tokens: int
+    prompt: str,
+    response_format: dict | None,
+    max_tokens: int,
+    model: str | None = None,
+    num_ctx: int | None = None,
 ) -> tuple[str, Usage]:
     """Call the Ollama /api/generate endpoint and return the text and usage."""
-    config = _ollama_config()
+    config = _ollama_config(model)
     payload = {
         "model": config["model"],
         "prompt": prompt,
         "stream": False,
         "think": False,
-        "keep_alive": -1,
-        "options": _ollama_options(max_tokens),
+        "options": _ollama_options(max_tokens, num_ctx),
     }
+    keep_alive = os.environ.get("OLLAMA_KEEP_ALIVE")
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
     if response_format is not None:
         payload["format"] = response_format
     body = _post_json(
