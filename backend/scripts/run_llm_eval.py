@@ -175,6 +175,12 @@ def main() -> None:
     parser.add_argument("--strip-code", action="store_true")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--domain", help="limita a un dominio")
+    parser.add_argument(
+        "--urls",
+        help="file con una URL per riga: esegue solo quelle pagine. Serve a "
+             "provare una modifica su un sottoinsieme scelto invece di "
+             "ripagare l'intero gold standard.",
+    )
     parser.add_argument("--keep-text", action="store_true",
                         help="salva anche il markdown estratto (file piu' grande)")
     parser.add_argument(
@@ -191,6 +197,19 @@ def main() -> None:
     pages = load_pages()
     if args.domain:
         pages = [p for p in pages if p["domain"] == args.domain]
+    if args.urls:
+        wanted = {
+            line.strip()
+            for line in open(args.urls, encoding="utf-8")
+            if line.strip() and not line.startswith("#")
+        }
+        pages = [p for p in pages if p["url"] in wanted]
+        missing = wanted - {p["url"] for p in pages}
+        if missing:
+            raise SystemExit(
+                "URL non presenti nel gold standard:\n  "
+                + "\n  ".join(sorted(missing))
+            )
 
     done: dict[str, dict] = {}
     if os.path.exists(args.out):
@@ -217,32 +236,47 @@ def main() -> None:
     print(f"chunking  {'attivo' if args.chunk else 'spento'}")
     print(f"da fare   {len(todo)} pagine su {len(pages)}, {args.workers} in parallelo\n")
 
+    def save() -> list[dict]:
+        """Write what has been paid for so far, and return it.
+
+        Called after every page rather than once at the end. A run of forty
+        pages costs real money and takes half an hour; writing only on the
+        last line means a crash, a dropped connection or a Ctrl-C throws away
+        everything already bought, and the resume logic above then has nothing
+        to resume from.
+        """
+        records = [done[p["url"]] for p in pages if p["url"] in done]
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "model": client.get_model_name(),
+                    "provider": os.environ.get("LLM_PROVIDER", "ollama"),
+                    "condition": condition,
+                    "budget_tokens": int(
+                        os.environ.get("LLM_PARSER_CONTEXT_TOKENS", 128000)
+                    ),
+                    "chunking": args.chunk,
+                    "eur_per_usd": client.eur_per_usd(),
+                    "records": records,
+                },
+                handle,
+                ensure_ascii=False,
+                indent=2,
+            )
+        return records
+
     started = time.monotonic()
+    records = save()
     if todo:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             for record in pool.map(
                 lambda p: run_page(p, args.strip_code, args.keep_text), todo
             ):
                 done[record["url"]] = record
+                records = save()
     elapsed = time.monotonic() - started
 
-    records = [done[p["url"]] for p in pages if p["url"] in done]
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as handle:
-        json.dump(
-            {
-                "model": client.get_model_name(),
-                "provider": os.environ.get("LLM_PROVIDER", "ollama"),
-                "condition": condition,
-                "budget_tokens": int(os.environ.get("LLM_PARSER_CONTEXT_TOKENS", 128000)),
-                "chunking": args.chunk,
-                "eur_per_usd": client.eur_per_usd(),
-                "records": records,
-            },
-            handle,
-            ensure_ascii=False,
-            indent=2,
-        )
     summarise(records)
     print(f"\ntempo totale {elapsed/60:.1f} min -> {args.out}")
 

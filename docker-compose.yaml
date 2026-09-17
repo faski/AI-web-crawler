@@ -85,6 +85,12 @@ services:
       # rather than read in pieces, which is what every recorded run did.
       LLM_PARSER_CHUNKING: ${LLM_PARSER_CHUNKING:-0}
       LLM_EUR_PER_USD: ${LLM_EUR_PER_USD:-}
+    volumes:
+      # Results of the evaluation runs. The image does not carry them (output/
+      # is in .dockerignore) and without this they live only inside a running
+      # container, so rebuilding the image throws away files that cost real
+      # money to produce.
+      - ./output:/app/output
     depends_on:
       mariadb:
         condition: service_healthy
