@@ -228,6 +228,27 @@ def build_self_check_prompt(url: str, html_text: str, parsed_text: str) -> str:
         from it. Judge the Markdown against that HTML only. There is no
         reference text, and you must not use outside knowledge.
 
+        WHAT COUNTS AS MAIN CONTENT. The extraction was asked to follow the
+        rules below, and "complete" means complete according to THESE rules,
+        not according to what you would have extracted yourself. Material the
+        rules tell the extractor to leave out is not missing: it was dropped on
+        purpose, and reporting it as missing would turn this check into a
+        disagreement between two prompts instead of a reading of one page.
+
+        Anything the rules order the extractor to drop is NEVER missing. Its
+        absence is the extraction working. This covers, among others: images;
+        link addresses; footnote markers such as [1] or [N 1]; infoboxes and
+        summary boxes; and everything from a Note / References / Bibliografia /
+        Voci correlate / Collegamenti esterni / See also / External links
+        heading onwards. Do not report any of these as missing content, and do
+        not treat their absence as a reason to answer false.
+
+        What "complete" is really asking is narrower: is there a paragraph, a
+        heading, a list item or a table row of the article's own body that a
+        reader would expect to find and that is not there?
+
+{_EXTRACTION_RULES}
+
         Answer two questions:
 
         - "complete": true if every part of the page's main content is present
@@ -250,6 +271,98 @@ def build_self_check_prompt(url: str, html_text: str, parsed_text: str) -> str:
         {html_text}
 
         Extracted Markdown:
+        {parsed_text}
+
+        Answer ONLY with a JSON object in this exact format:
+        {{"notes": "<problemi concreti trovati>", "complete": <true|false>, "coherent": <true|false>}}
+        """
+    )
+
+
+def build_self_check_fragment_prompt(
+    url: str,
+    parsed_text: str,
+    html_fragment: str,
+    index: int,
+    total: int,
+) -> str:
+    """Return the self-check prompt for one piece of an over-long page.
+
+    The whole Markdown is shown against one piece of the HTML, so the two
+    questions have to be narrowed to what a piece can actually answer.
+
+    ``complete`` stays well posed: the model is asked whether the main content
+    *of this piece* reached the Markdown, and a page is complete when every
+    piece says so.
+
+    ``coherent`` is narrowed to what this piece can refute: boilerplate it can
+    see in its own HTML and also in the Markdown, or content of its own that
+    the Markdown reproduces wrongly. What no piece can catch is invention -
+    Markdown text that appears in no fragment at all - because a piece that
+    does not contain a passage has no way to tell whether another piece did.
+    That blind spot is a property of the check, not a bug in the prompt, and
+    the whole-page check shares it whenever the invented text really is in the
+    HTML, buried in a <script> the reader never sees.
+    """
+    return (
+        f"""
+        You check the quality of a web page extraction.
+
+        The page was too long to read in one go, so its RAW HTML was cut into
+        {total} pieces. You are given piece {index}, together with the whole
+        MARKDOWN that was extracted from the complete page. There is no
+        reference text, and you must not use outside knowledge.
+
+        WHAT COUNTS AS MAIN CONTENT. The extraction was asked to follow the
+        rules below, and "complete" means complete according to THESE rules,
+        not according to what you would have extracted yourself. Material the
+        rules tell the extractor to leave out is not missing: it was dropped on
+        purpose, and reporting it as missing would turn this check into a
+        disagreement between two prompts instead of a reading of one page.
+
+        Anything the rules order the extractor to drop is NEVER missing. Its
+        absence is the extraction working. This covers, among others: images;
+        link addresses; footnote markers such as [1] or [N 1]; infoboxes and
+        summary boxes; and everything from a Note / References / Bibliografia /
+        Voci correlate / Collegamenti esterni / See also / External links
+        heading onwards. Do not report any of these as missing content, and do
+        not treat their absence as a reason to answer false.
+
+        What "complete" is really asking is narrower: is there a paragraph, a
+        heading, a list item or a table row of the article's own body that a
+        reader would expect to find and that is not there?
+
+{_EXTRACTION_RULES}
+
+        THE MARKDOWN COVERS THE WHOLE PAGE, THIS HTML IS ONE PIECE OF IT.
+        Most of the Markdown therefore comes from parts of the page you cannot
+        see. That is normal and is never a problem. Judge only what this piece
+        lets you judge:
+
+        - "complete": true if every part of the page's MAIN CONTENT that is
+          present IN THIS PIECE of HTML also appears in the Markdown. False if
+          this piece contains a paragraph, a heading, a list or a table row
+          that a reader would call part of the article or of the main table,
+          and that is missing from the Markdown. If this piece holds no main
+          content at all - many pieces are nothing but <script> and <style> -
+          then nothing is missing and the answer is true.
+        - "coherent": true unless THIS PIECE proves something wrong. It proves
+          something wrong when text you can see in this piece is a navigation
+          menu, a banner, an advertisement, a "related articles" list or a
+          footer, and that same text appears in the Markdown; or when content
+          of this piece is reproduced in the Markdown distorted, duplicated or
+          out of order. Markdown text you simply cannot find in this piece is
+          NOT a problem: it belongs to another piece. Do not report it.
+
+        In "notes", name the concrete problems you found, in one or two
+        sentences, quoting the text at issue. If you found none, say so.
+
+        Page URL: {url}
+
+        Piece {index} of {total} of the raw HTML:
+        {html_fragment}
+
+        Markdown extracted from the whole page:
         {parsed_text}
 
         Answer ONLY with a JSON object in this exact format:

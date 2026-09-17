@@ -41,6 +41,7 @@ from ..llm.parser_prompt import (
     SELF_CHECK_SCHEMA,
     build_chunk_prompt,
     build_parser_prompt,
+    build_self_check_fragment_prompt,
     build_self_check_prompt,
 )
 from . import html_chunker
@@ -54,6 +55,12 @@ DEFAULT_CHARS_PER_TOKEN = 3.0
 # being wrong in this direction only wastes a little room, while being wrong
 # in the other direction overflows the context and loses the tail in silence.
 PROMPT_OVERHEAD_TOKENS = 2000
+
+# Room set aside for the self-check answer. The reply is one small JSON
+# object, but a model that reasons before answering spends tokens doing it,
+# and a truncated reply is scored as a failed check rather than as a page
+# with a problem, which would be a lie about the page.
+SELF_CHECK_ANSWER_TOKENS = 1024
 
 # A fenced block wrapping the whole answer, which models add even when told
 # not to. Only an outer fence is removed: see _clean_markdown.
@@ -127,6 +134,29 @@ def _fragment_budget() -> int:
             f"no room left for HTML: a context of {_context_budget()} tokens "
             f"cannot hold a {PROMPT_OVERHEAD_TOKENS} token prompt and a "
             f"{_max_tokens()} token answer"
+        )
+    return budget
+
+
+def _self_check_budget(parsed_text: str) -> int:
+    """Return how much HTML one self-check call may carry, in tokens.
+
+    The check has to hold three things at once where parsing held two: the
+    prompt, the HTML, and this time the Markdown as well, since the model is
+    asked to compare them. The Markdown is charged in full even when the HTML
+    is cut, because every piece is judged against the whole answer.
+    """
+    budget = (
+        _context_budget()
+        - PROMPT_OVERHEAD_TOKENS
+        - SELF_CHECK_ANSWER_TOKENS
+        - estimate_tokens(parsed_text)
+    )
+    if budget <= 0:
+        raise ValueError(
+            f"no room left for HTML: a context of {_context_budget()} tokens "
+            f"cannot hold the prompt, a {estimate_tokens(parsed_text)} token "
+            "answer to check, and the reply"
         )
     return budget
 
@@ -224,6 +254,63 @@ class ParseOutcome:
     def cost_eur(self) -> float:
         """Return what the whole page cost, in euros at the configured rate."""
         return self.cost_usd * client.eur_per_usd()
+
+
+@dataclass(frozen=True)
+class SelfCheckOutcome:
+    """The model's verdict on an extraction, and what asking cost.
+
+    ``fragments`` is 1 for a page checked in one call. A page too long to show
+    the model in one go is checked piece by piece, and ``per_fragment`` keeps
+    the individual verdicts so an aggregate "not complete" can be traced back
+    to the piece that said so.
+    """
+
+    result: SelfCheckResult
+    fragments: int
+    per_fragment: tuple[SelfCheckResult, ...] = ()
+    call_costs_usd: tuple[float, ...] = ()
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    @property
+    def cost_usd(self) -> float:
+        """Return what checking this page cost, in dollars."""
+        return sum(self.call_costs_usd)
+
+    @property
+    def cost_eur(self) -> float:
+        """Return what checking this page cost, in euros at the configured rate."""
+        return self.cost_usd * client.eur_per_usd()
+
+
+def _merge_checks(verdicts: list[SelfCheckResult], total: int) -> SelfCheckResult:
+    """Combine per-fragment verdicts into one verdict for the page.
+
+    Both flags are an AND: a page is complete when no piece found anything of
+    its own missing, and coherent when no piece could refute anything. One
+    piece saying no is enough, because the piece that says no is the only one
+    that saw the evidence.
+
+    Only the notes of the pieces that reported a problem are kept. Keeping all
+    of them would bury the one sentence that matters under a dozen
+    "no problems found".
+    """
+    complaints = [
+        f"[pezzo {index}/{total}] {verdict.notes.strip()}"
+        for index, verdict in enumerate(verdicts, start=1)
+        if not (verdict.complete and verdict.coherent)
+    ]
+    return SelfCheckResult(
+        model_name=client.get_model_name(),
+        complete=all(v.complete for v in verdicts),
+        coherent=all(v.coherent for v in verdicts),
+        notes=(
+            " ".join(complaints)
+            if complaints
+            else f"Nessun problema trovato in {total} pezzi."
+        ),
+    )
 
 
 class LlmParser:
@@ -341,20 +428,82 @@ class LlmParser:
         )
 
     def self_check(self, url: str, html_text: str, parsed_text: str) -> SelfCheckResult:
-        """Ask the model whether its own extraction is complete and coherent.
+        """Ask the model whether its own extraction is complete and coherent."""
+        return self.self_check_detailed(url, html_text, parsed_text).result
 
-        This is the reference-free check: the model sees the HTML and the
-        Markdown, and no gold standard.
+    def self_check_detailed(
+        self, url: str, html_text: str, parsed_text: str
+    ) -> SelfCheckOutcome:
+        """Return the model's verdict on its own extraction, and what it cost.
 
-        Raises:
-            HtmlTooLongError: if HTML and Markdown together exceed the budget.
+        This is the reference-free check the brief asks for: the model sees the
+        HTML and the Markdown, and no gold standard.
+
+        A page that does not fit is cut with the same splitter parsing uses, so
+        the check reaches the long pages instead of refusing exactly the ten
+        pages chunking was built to reach. Refusing them here would have left
+        the check measuring only the easy half of the corpus.
         """
-        self._assert_fits(url, html_text + parsed_text)
+        budget = _self_check_budget(parsed_text)
+        if estimate_tokens(html_text) <= budget:
+            return self._check_whole(url, html_text, parsed_text)
+        return self._check_in_fragments(url, html_text, parsed_text, budget)
+
+    def _check_whole(
+        self, url: str, html_text: str, parsed_text: str
+    ) -> SelfCheckOutcome:
+        """Check a page that fits, in a single call."""
         prompt = build_self_check_prompt(url, html_text, parsed_text)
-        raw_response = client.generate(
-            prompt, response_format=SELF_CHECK_SCHEMA, max_tokens=1024
+        raw_response, usage = client.generate_with_usage(
+            prompt,
+            response_format=SELF_CHECK_SCHEMA,
+            max_tokens=SELF_CHECK_ANSWER_TOKENS,
         )
-        return _parse_self_check(raw_response)
+        verdict = _parse_self_check(raw_response)
+        return SelfCheckOutcome(
+            result=verdict,
+            fragments=1,
+            per_fragment=(verdict,),
+            call_costs_usd=(usage.cost_usd,),
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+        )
+
+    def _check_in_fragments(
+        self, url: str, html_text: str, parsed_text: str, budget: int
+    ) -> SelfCheckOutcome:
+        """Check a page piece by piece, judging each against the whole answer."""
+        fragments = html_chunker.split_html(html_text, budget, estimate_tokens)
+
+        verdicts: list[SelfCheckResult] = []
+        costs: list[float] = []
+        prompt_tokens = completion_tokens = 0
+        for number, fragment in enumerate(fragments, start=1):
+            prompt = build_self_check_fragment_prompt(
+                url=url,
+                parsed_text=parsed_text,
+                html_fragment=fragment,
+                index=number,
+                total=len(fragments),
+            )
+            raw_response, usage = client.generate_with_usage(
+                prompt,
+                response_format=SELF_CHECK_SCHEMA,
+                max_tokens=SELF_CHECK_ANSWER_TOKENS,
+            )
+            verdicts.append(_parse_self_check(raw_response))
+            costs.append(usage.cost_usd)
+            prompt_tokens += usage.prompt_tokens
+            completion_tokens += usage.completion_tokens
+
+        return SelfCheckOutcome(
+            result=_merge_checks(verdicts, len(fragments)),
+            fragments=len(fragments),
+            per_fragment=tuple(verdicts),
+            call_costs_usd=tuple(costs),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
 
     @staticmethod
     def _assert_fits(url: str, text: str) -> None:
