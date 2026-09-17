@@ -8,6 +8,7 @@ no time, whichever provider is configured.
 from fastapi import APIRouter, HTTPException
 
 from ..lib.db import llm_queries
+from ..lib.evaluation import local_cost
 from ..schemas.llm_runs import (
     LlmComparisonRow,
     LlmDomainRow,
@@ -64,8 +65,25 @@ def _side(run_id: int, url: str) -> LlmTextSide | None:
 
 @router.get("/llm_runs", response_model=list[LlmRunSummary])
 def list_llm_runs():
-    """Return every stored run with its headline numbers."""
-    return llm_queries.list_runs()
+    """Return every stored run with its headline numbers.
+
+    The local cost is derived here rather than stored: it is a function of the
+    run's duration and of four parameters about one machine, and those
+    parameters change without the run changing. Freezing a figure into the
+    database would mean a corrected electricity price could never reach the
+    runs already recorded.
+
+    It stays empty for a run made against a remote provider, whose seconds
+    were spent waiting rather than computing.
+    """
+    runs = llm_queries.list_runs()
+    for run in runs:
+        spent = local_cost(run.get("wall_seconds"), run.get("provider"))
+        if spent is not None:
+            run["local_cost_eur"] = spent.total_eur
+            run["local_cost_electricity_eur"] = spent.electricity_eur
+            run["local_cost_hardware_eur"] = spent.hardware_eur
+    return runs
 
 
 @router.get("/llm_runs/{run_id}/domains", response_model=list[LlmDomainRow])

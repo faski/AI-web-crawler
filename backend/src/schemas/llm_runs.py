@@ -34,6 +34,14 @@ class LlmRunSummary(BaseModel):
     # True when the amount is the run's total read from the provider's
     # balance, with no per-page breakdown behind it.
     cost_is_aggregate: bool = False
+    # Wall-clock seconds of the whole run, and what they cost on this machine.
+    # Present for every run; meaningful for the ones nobody invoiced, where it
+    # is the only cost there is. Not comparable with cost_eur without saying
+    # so: an invoice carries a provider's margin, this does not.
+    wall_seconds: float | None = None
+    local_cost_eur: float | None = None
+    local_cost_electricity_eur: float | None = None
+    local_cost_hardware_eur: float | None = None
 
 
 class LlmDomainRow(BaseModel):

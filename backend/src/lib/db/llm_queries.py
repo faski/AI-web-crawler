@@ -119,6 +119,10 @@ def list_runs() -> list[dict]:
                AVG(CASE WHEN p.status='ok' THEN p.excess_ratio END),
                AVG(CASE WHEN p.status='ok' THEN p.seconds END),
                SUM(CASE WHEN p.status='ok' THEN p.cpu_seconds END),
+               -- Wall-clock time of the whole run, which is what the machine
+               -- spent drawing power and wearing out. The average above is
+               -- for reading; this one is for costing.
+               SUM(CASE WHEN p.status='ok' THEN p.seconds END),
                -- Only the pages that were actually sent. A page skipped for
                -- being too long has a token count too, but it never reached
                -- the model and must not appear as consumption.
@@ -150,13 +154,14 @@ def list_runs() -> list[dict]:
             "precision": row[10], "recall": row[11], "f1": row[12],
             "excess_ratio": row[13], "seconds": row[14],
             "cpu_seconds": row[15],
-            "input_tokens": int(row[16] or 0),
-            "skipped_tokens": int(row[17] or 0),
-            "calls": int(row[18] or 0),
-            "chunked_pages": int(row[19] or 0),
-            "cost_eur": row[20],
-            "eur_per_usd": row[21],
-            "cost_is_aggregate": bool(row[22]),
+            "wall_seconds": row[16],
+            "input_tokens": int(row[17] or 0),
+            "skipped_tokens": int(row[18] or 0),
+            "calls": int(row[19] or 0),
+            "chunked_pages": int(row[20] or 0),
+            "cost_eur": row[21],
+            "eur_per_usd": row[22],
+            "cost_is_aggregate": bool(row[23]),
         }
         for row in rows
     ]

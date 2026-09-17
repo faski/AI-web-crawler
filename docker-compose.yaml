@@ -85,6 +85,18 @@ services:
       # rather than read in pieces, which is what every recorded run did.
       LLM_PARSER_CHUNKING: ${LLM_PARSER_CHUNKING:-0}
       LLM_EUR_PER_USD: ${LLM_EUR_PER_USD:-}
+      # What running something locally costs, for the comparison against a
+      # billed provider. Facts about one laptop and one electricity contract,
+      # not about this project, so they live here and not in the code.
+      # Misurato con powermetrics su questo MacBook Air M1: 1,65 W sotto
+      # carico contro 0,13 W a riposo. E' la potenza IN PIU' dovuta al lavoro,
+      # non il consumo della macchina, ed e' potenza del chip: schermo, SSD e
+      # perdite dell'alimentatore restano fuori, come devono, perche' lo
+      # schermo e' acceso comunque.
+      LOCAL_POWER_WATTS: ${LOCAL_POWER_WATTS:-1.52}
+      ELECTRICITY_EUR_PER_KWH: ${ELECTRICITY_EUR_PER_KWH:-0.236}
+      HARDWARE_EUR: ${HARDWARE_EUR:-1250.74}
+      HARDWARE_LIFETIME_YEARS: ${HARDWARE_LIFETIME_YEARS:-8}
     volumes:
       # Results of the evaluation runs. The image does not carry them (output/
       # is in .dockerignore) and without this they live only inside a running

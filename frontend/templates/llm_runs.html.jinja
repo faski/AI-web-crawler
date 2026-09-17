@@ -29,7 +29,10 @@
 {%- endmacro %}
 
 {% macro cost_label(run) -%}
-  {%- if not run.cost_eur %}<span class="delta-nil" title="modello in locale, nessun importo fatturato">&mdash;</span>
+  {%- if not run.cost_eur and run.local_cost_eur %}&euro; {{ '%.7f'|format(run.local_cost_eur) }}
+    <span class="delta-nil"
+          title="Software gratuito: non c'è un importo fatturato. Questa è la spesa di chi lo esegue, su {{ '%.1f'|format(run.wall_seconds) }} s di lavoro: corrente € {{ '%.7f'|format(run.local_cost_electricity_eur) }} più usura del computer € {{ '%.7f'|format(run.local_cost_hardware_eur) }}. Non è confrontabile alla pari con una fattura, che contiene anche il margine del fornitore.">stimato</span>
+  {%- elif not run.cost_eur %}<span class="delta-nil" title="nessun importo fatturato e nessuna durata registrata">&mdash;</span>
   {%- elif run.cost_is_aggregate %}&euro; {{ '%.4f'|format(run.cost_eur) }}
     <span class="delta-nil">(totale della run, senza dettaglio per chiamata)</span>
   {%- else %}&euro; {{ '%.4f'|format(run.cost_eur) }}
@@ -119,7 +122,11 @@
             <span title="{% if run.cost_is_aggregate %}Totale della run letto dal saldo del provider: questa run e' precedente al conteggio per chiamata, quindi non c'e' una ripartizione per pagina{% else %}Fatturato dal provider, chiamata per chiamata. Media: EUR {{ '%.5f'|format(run.cost_eur / run.calls) }}{% endif %}">
               &euro; {{ '%.4f'|format(run.cost_eur) }}{% if run.cost_is_aggregate %}<span class="delta-nil"> tot.</span>{% endif %}
             </span>
-          {% else %}<span class="delta-nil" title="Modello in locale: non c'e' un importo fatturato, il costo si legge nei secondi di CPU">&mdash;</span>{% endif %}
+          {% elif run.local_cost_eur %}
+            <span title="Software gratuito: nessun importo fatturato. Spesa di chi lo esegue su {{ '%.1f'|format(run.wall_seconds) }} s: corrente € {{ '%.7f'|format(run.local_cost_electricity_eur) }} + usura del computer € {{ '%.7f'|format(run.local_cost_hardware_eur) }}">
+              &euro; {{ '%.7f'|format(run.local_cost_eur) }}<br><span class="delta-nil">corrente e usura</span>
+            </span>
+          {% else %}<span class="delta-nil" title="nessun importo fatturato e nessuna durata registrata">&mdash;</span>{% endif %}
         </td>
       </tr>
       {% endfor %}
@@ -220,11 +227,22 @@
         <td>{{ cost_label(left_run) }}</td>
         <td>{{ cost_label(right_run) }}</td>
         <td>
-          {% if left_run.cost_eur and right_run.cost_eur %}
-            {% set ratio = left_run.cost_eur / right_run.cost_eur %}
-            <span class="{{ 'delta-pos' if ratio > 1 else 'delta-neg' }}">B {{ '%.1f'|format(ratio if ratio > 1 else 1 / ratio) }}&times; {{ "più economica" if ratio > 1 else "più cara" }}</span>
+          {% set sinistra = left_run.cost_eur or left_run.local_cost_eur %}
+          {% set destra = right_run.cost_eur or right_run.local_cost_eur %}
+          {% if sinistra and destra %}
+            {% set ratio = sinistra / destra %}
+            <span class="{{ 'delta-pos' if ratio > 1 else 'delta-neg' }}">B {{ '{:,.0f}'.format(ratio if ratio > 1 else 1 / ratio) }}&times; {{ "più economica" if ratio > 1 else "più cara" }}</span>
+            {% if not (left_run.cost_eur and right_run.cost_eur) %}
+              <br><span class="delta-nil" title="Una delle due cifre è una fattura, che include il margine del fornitore; l'altra è la spesa vera di chi esegue il software, senza margine perché non paga nessuno. Il rapporto dà l'ordine di grandezza, non una misura esatta.">fattura contro spesa propria: ordine di grandezza</span>
+            {% endif %}
           {% else %}<span class="delta-nil">grandezze diverse</span>{% endif %}
         </td>
+      </tr>
+      <tr>
+        <td class="domain-cell">Pagine per euro</td>
+        <td>{% set c = left_run.cost_eur or left_run.local_cost_eur %}{% if c %}{{ '{:,.0f}'.format(left_run.ok / c) }}{% else %}&mdash;{% endif %}</td>
+        <td>{% set c = right_run.cost_eur or right_run.local_cost_eur %}{% if c %}{{ '{:,.0f}'.format(right_run.ok / c) }}{% else %}&mdash;{% endif %}</td>
+        <td><span class="delta-nil">quante pagine estrae un euro</span></td>
       </tr>
       <tr>
         <td class="domain-cell">Chiamate al modello</td>
