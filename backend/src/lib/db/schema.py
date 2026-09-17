@@ -82,6 +82,18 @@ LATER_COLUMNS = (
     # How much of the answer was found in the page's visible text. A
     # measurement only: nothing in the pipeline acts on it.
     "ALTER TABLE llm_page_results ADD COLUMN grounded DOUBLE",
+    # The model's own verdict on the page it extracted: the brief's
+    # reference-free check. Kept beside the gold-standard scores rather than
+    # in a table of its own, because the only question worth asking of it is
+    # whether it agrees with them. NULL on a run that was never checked, which
+    # is not the same as a run that was checked and passed.
+    "ALTER TABLE llm_page_results ADD COLUMN check_complete TINYINT(1)",
+    "ALTER TABLE llm_page_results ADD COLUMN check_coherent TINYINT(1)",
+    "ALTER TABLE llm_page_results ADD COLUMN check_notes TEXT",
+    # How many calls the check itself took, and what it cost. Checking a page
+    # is a second pass over the same HTML, so it has its own price.
+    "ALTER TABLE llm_page_results ADD COLUMN check_fragments INT",
+    "ALTER TABLE llm_page_results ADD COLUMN check_cost_eur DOUBLE",
     "ALTER TABLE llm_runs ADD COLUMN eur_per_usd DOUBLE",
     # Cost known for the run as a whole but not page by page. Runs made
     # before the per-call accounting existed can still report what they cost,

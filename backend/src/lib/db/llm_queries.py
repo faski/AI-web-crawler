@@ -8,7 +8,7 @@ model call.
 
 import json
 
-from .connection import fetch_all, fetch_one, get_connection
+from .connection import execute, fetch_all, fetch_one, get_connection
 
 # Columns of llm_page_results in the order used by the insert and the reads,
 # kept in one place so the two cannot drift apart.
@@ -209,13 +209,64 @@ def get_run_by_domain(run_id: int) -> list[dict]:
     ]
 
 
+def attach_self_check(run_id: int, results: list[dict]) -> int:
+    """Store the model's verdicts on the pages of a run already imported.
+
+    The check is a second pass over an extraction that already exists, so the
+    verdicts are written onto the rows of that run rather than imported as a
+    run of their own: the question "did the model catch its own bad page" is
+    only answerable with the score and the verdict side by side.
+
+    ``grounded`` is updated at the same time. The check recomputes it from the
+    stored Markdown, and the runs made before that measurement existed have
+    nothing in the column.
+
+    Returns:
+        How many pages were updated.
+    """
+    checked = [r for r in results if r.get("status") == "ok"]
+    # Counted before writing, by asking which of these URLs this run actually
+    # has. The rowcount an UPDATE returns through this driver is not usable
+    # for the purpose - it came back 0 on a write that landed correctly - and
+    # a wrong count here would either hide a mismatched run or raise a false
+    # alarm on a good import.
+    known = {
+        row[0]
+        for row in fetch_all(
+            "SELECT url FROM llm_page_results WHERE run_id = ?", (run_id,)
+        )
+    }
+    for result in checked:
+        execute(
+            """
+            UPDATE llm_page_results
+               SET check_complete = ?, check_coherent = ?, check_notes = ?,
+                   check_fragments = ?, check_cost_eur = ?,
+                   grounded = COALESCE(?, grounded)
+             WHERE run_id = ? AND url = ?
+            """,
+            (
+                int(bool(result["complete"])),
+                int(bool(result["coherent"])),
+                result.get("notes"),
+                result.get("check_fragments"),
+                result.get("cost_eur"),
+                result.get("grounded"),
+                run_id,
+                result["url"],
+            ),
+        )
+    return sum(1 for r in checked if r["url"] in known)
+
+
 def get_run_pages(run_id: int) -> list[dict]:
     """Return every page of a run, worst score first so failures are visible."""
     rows = fetch_all(
         """
         SELECT url, domain, status, input_tokens, seconds,
                precision_val, recall_val, f1, excess_ratio,
-               fragments, cost_eur, call_costs_usd, grounded
+               fragments, cost_eur, call_costs_usd, grounded,
+               check_complete, check_coherent, check_notes, check_cost_eur
         FROM llm_page_results
         WHERE run_id = ?
         ORDER BY (f1 IS NULL) DESC, f1 ASC
@@ -234,6 +285,93 @@ def get_run_pages(run_id: int) -> list[dict]:
             # one call has a single entry, a page read in four has four.
             "call_costs_usd": json.loads(row[11]) if row[11] else None,
             "grounded": row[12],
+            # NULL when this run was never self-checked, which the template
+            # has to tell apart from a page the model checked and passed.
+            "check_complete": None if row[13] is None else bool(row[13]),
+            "check_coherent": None if row[14] is None else bool(row[14]),
+            "check_notes": row[15],
+            "check_cost_eur": row[16],
+        }
+        for row in rows
+    ]
+
+
+def get_self_check_summary(run_id: int) -> dict | None:
+    """Return how the model's own verdicts line up with the gold standard.
+
+    The verdict is ``check_coherent`` alone. The model was asked two questions
+    and the second one turned out to be worthless: "is anything missing"
+    tracked the gold standard at r = +0.06 on this run, because answering it
+    means noticing an absence and then deciding whether the extraction rules
+    authorised it, and a 9B model reports the absence without applying the
+    filter. Combining the two with AND therefore destroyed the information the
+    coherence answer carries. ``not_complete`` is still reported, as the
+    measurement that led to dropping it.
+
+    The number that matters is not how often the check is "right" - a check
+    that passes everything agrees with a corpus that is mostly good, and says
+    nothing - but how far apart the two groups sit: the mean F1 of the pages
+    it promoted against the mean F1 of the pages it failed. A gap means the
+    verdict carries information; no gap means it does not, whatever its
+    agreement rate.
+
+    Returns None when this run was never checked.
+    """
+    row = fetch_one(
+        """
+        SELECT COUNT(*),
+               SUM(check_coherent),
+               AVG(CASE WHEN check_coherent THEN f1 END),
+               AVG(CASE WHEN NOT check_coherent THEN f1 END),
+               SUM(NOT check_complete),
+               SUM(NOT check_coherent),
+               SUM(check_cost_eur),
+               AVG(f1)
+        FROM llm_page_results
+        WHERE run_id = ? AND check_coherent IS NOT NULL
+        """,
+        (run_id,),
+    )
+    if row is None or not row[0]:
+        return None
+    return {
+        "checked": int(row[0]),
+        "passed": int(row[1] or 0),
+        "failed": int(row[0]) - int(row[1] or 0),
+        "f1_passed": row[2],
+        "f1_failed": row[3],
+        "not_complete": int(row[4] or 0),
+        "not_coherent": int(row[5] or 0),
+        "cost_eur": row[6],
+        "f1_all": row[7],
+    }
+
+
+def get_self_check_pages(run_id: int) -> list[dict]:
+    """Return the checked pages, the ones the check failed first.
+
+    Ordered so the disagreements are on top: a page the model failed with a
+    high F1 is a false alarm, and one it passed with a low F1 is a miss. Both
+    are what someone reading this page came to see. The order follows the
+    coherence answer, which is the verdict; the completeness answer travels
+    with the row but does not decide anything.
+    """
+    rows = fetch_all(
+        """
+        SELECT url, domain, f1, grounded, check_complete, check_coherent,
+               check_notes, check_fragments, check_cost_eur
+        FROM llm_page_results
+        WHERE run_id = ? AND check_coherent IS NOT NULL
+        ORDER BY check_coherent ASC, f1 ASC
+        """,
+        (run_id,),
+    )
+    return [
+        {
+            "url": row[0], "domain": row[1], "f1": row[2], "grounded": row[3],
+            "check_complete": bool(row[4]), "check_coherent": bool(row[5]),
+            "check_notes": row[6], "check_fragments": row[7],
+            "check_cost_eur": row[8],
         }
         for row in rows
     ]
