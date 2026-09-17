@@ -70,6 +70,49 @@ class LlmPageRow(BaseModel):
     # Share of the extraction found in the page's visible text. A low value
     # means the model described a page other than this one.
     grounded: float | None = None
+    # What the model said about its own extraction, with no gold standard in
+    # front of it. None means this run was never checked, which is not the
+    # same as a page that was checked and passed.
+    check_complete: bool | None = None
+    check_coherent: bool | None = None
+    check_notes: str | None = None
+    check_cost_eur: float | None = None
+
+
+class LlmSelfCheckSummary(BaseModel):
+    """How a run's self-verdicts line up with the gold standard."""
+
+    checked: int
+    passed: int
+    failed: int
+    # Mean F1 on each side of the verdict. The distance between these two is
+    # the whole measurement: a check that separates nothing puts them level.
+    f1_passed: float | None = None
+    f1_failed: float | None = None
+    f1_all: float | None = None
+    not_complete: int = 0
+    not_coherent: int = 0
+    cost_eur: float | None = None
+    # How well each measure tracks the gold-standard F1, on this run. The
+    # point of putting them side by side is that one of them is free.
+    r_check: float | None = None
+    r_grounded: float | None = None
+    # The discarded half of the question, kept so the choice is visible.
+    r_complete: float | None = None
+
+
+class LlmSelfCheckRow(BaseModel):
+    """One checked page: what the gold standard says and what the model said."""
+
+    url: str
+    domain: str
+    f1: float | None = None
+    grounded: float | None = None
+    check_complete: bool
+    check_coherent: bool
+    check_notes: str | None = None
+    check_fragments: int | None = None
+    check_cost_eur: float | None = None
 
 
 class LlmComparisonRow(BaseModel):

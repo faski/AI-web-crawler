@@ -13,12 +13,33 @@ from ..schemas.llm_runs import (
     LlmDomainRow,
     LlmPageRow,
     LlmRunSummary,
+    LlmSelfCheckRow,
+    LlmSelfCheckSummary,
     LlmTextComparison,
     LlmTextSide,
     SaveRunRequest,
 )
 
 router = APIRouter()
+
+
+def _pearson(xs: list[float], ys: list[float]) -> float | None:
+    """Return Pearson's r, or None when one of the two series does not vary.
+
+    Used to ask whether a verdict carries information about the score. A
+    constant series has no correlation to report, and returning 0 for it would
+    read as "measured, and no relation" instead of "not measurable".
+    """
+    if len(xs) < 2:
+        return None
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    dx = [x - mx for x in xs]
+    dy = [y - my for y in ys]
+    sx = sum(d * d for d in dx) ** 0.5
+    sy = sum(d * d for d in dy) ** 0.5
+    if not sx or not sy:
+        return None
+    return sum(a * b for a, b in zip(dx, dy)) / (sx * sy)
 
 
 def _side(run_id: int, url: str) -> LlmTextSide | None:
@@ -63,6 +84,40 @@ def llm_run_pages(run_id: int):
     if not rows:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
     return rows
+
+
+@router.get("/llm_runs/{run_id}/self_check")
+def llm_run_self_check(run_id: int):
+    """Return the run's self-check summary and the pages it judged.
+
+    404 when the run exists but was never checked: an empty summary would read
+    as "the model found nothing wrong", which is the opposite of "nobody
+    asked it".
+    """
+    summary = llm_queries.get_self_check_summary(run_id)
+    if summary is None:
+        raise HTTPException(
+            status_code=404, detail=f"Run {run_id} has no self-check results"
+        )
+    pages = llm_queries.get_self_check_pages(run_id)
+    scored = [p for p in pages if p["f1"] is not None]
+    # The verdict is the coherence answer alone; the completeness answer is
+    # correlated too, and kept, because "we measured it and dropped it" is a
+    # result and "we never looked" is not.
+    summary["r_check"] = _pearson(
+        [float(p["check_coherent"]) for p in scored], [p["f1"] for p in scored]
+    )
+    summary["r_complete"] = _pearson(
+        [float(p["check_complete"]) for p in scored], [p["f1"] for p in scored]
+    )
+    anchored = [p for p in scored if p["grounded"] is not None]
+    summary["r_grounded"] = _pearson(
+        [p["grounded"] for p in anchored], [p["f1"] for p in anchored]
+    )
+    return {
+        "summary": LlmSelfCheckSummary(**summary),
+        "pages": [LlmSelfCheckRow(**row) for row in pages],
+    }
 
 
 @router.get("/llm_runs/{run_id}/text")
