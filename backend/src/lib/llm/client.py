@@ -189,7 +189,16 @@ def _post_json(
                 raise requests.HTTPError(
                     f"{response.status_code} from provider", response=response
                 )
-            response.raise_for_status()
+            if not response.ok:
+                # raise_for_status() reports the status and throws the body
+                # away, but the body is where the provider explains itself:
+                # OpenRouter answers 400 with "Reasoning is mandatory for this
+                # endpoint and cannot be disabled", and without it all you see
+                # is "400 Client Error".
+                raise requests.HTTPError(
+                    f"{response.status_code} from provider: {response.text[:300]}",
+                    response=response,
+                )
             return response.json()
         except (*TRANSIENT_ERRORS, requests.HTTPError, ValueError) as error:
             fatal = isinstance(error, requests.HTTPError) and (
@@ -328,6 +337,15 @@ def _openrouter_response_format(response_format: dict | None) -> dict | None:
     }
 
 
+def _reasoning_allowed() -> bool:
+    """Return whether the model may spend output tokens on a reasoning trace."""
+    return os.environ.get("LLM_ALLOW_REASONING", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
 def _openrouter_payload(
     prompt: str, response_format: dict | None, max_tokens: int
 ) -> dict:
@@ -337,14 +355,20 @@ def _openrouter_payload(
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
         "max_tokens": max_tokens,
-        # Extraction gains nothing from an explicit reasoning trace, which
-        # would cost output tokens and blur the comparison between models
-        # that have the feature and models that do not.
-        "reasoning": {"enabled": False},
         # Without this the reply carries no cost, and what a page cost could
         # then only be guessed from a price list.
         "usage": {"include": True},
     }
+
+    # Extraction gains nothing from an explicit reasoning trace, which would
+    # cost output tokens and blur the comparison between models that have the
+    # feature and models that do not. Some models refuse to answer without it
+    # ("Reasoning is mandatory for this endpoint", HTTP 400), so comparing one
+    # of those means asking for it with LLM_ALLOW_REASONING=1 and saying so
+    # next to the result: that run is not measuring the same thing.
+    if not _reasoning_allowed():
+        payload["reasoning"] = {"enabled": False}
+
     schema = _openrouter_response_format(response_format)
     if schema is not None:
         payload["response_format"] = schema
@@ -371,7 +395,27 @@ def _generate_openrouter(
     if "error" in body and "choices" not in body:
         raise RuntimeError(f"OpenRouter error: {body['error']}")
     usage = body.get("usage") or {}
-    return body["choices"][0]["message"]["content"] or "", Usage(
+    choice = body["choices"][0]
+    content = choice["message"].get("content") or ""
+
+    # An empty answer used to be handed back as an empty string, and the
+    # caller scored it as a page from which nothing was extracted: a zero that
+    # looks like a bad model instead of a failed call. A reasoning model is
+    # the usual cause - it spends the whole max_tokens budget on the reasoning
+    # field and never starts the answer - so say what happened rather than
+    # letting the run record a silent zero.
+    if not content.strip():
+        reasoning = choice["message"].get("reasoning") or ""
+        if reasoning.strip():
+            detail = (
+                f"{len(reasoning)} characters of reasoning and no answer; "
+                "raise max_tokens or use a model that does not reason"
+            )
+        else:
+            detail = f"finish_reason={choice.get('finish_reason')!r}"
+        raise RuntimeError(f"empty answer from {get_model_name()}: {detail}")
+
+    return content, Usage(
         prompt_tokens=int(usage.get("prompt_tokens") or 0),
         completion_tokens=int(usage.get("completion_tokens") or 0),
         cost_usd=float(usage.get("cost") or 0.0),
