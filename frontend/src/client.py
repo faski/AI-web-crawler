@@ -185,6 +185,21 @@ def get_llm_run_domains(run_id: int) -> list[dict]:
         raise BackendUnavailable() from error
 
 
+def get_llm_self_check(run_id: int) -> dict | None:
+    """Return a run's self-check results, or None if it was never checked.
+
+    A run without a check is the normal case - the check is a separate, paid
+    pass - so 404 is an answer here, not a failure.
+    """
+    try:
+        response = requests.get(
+            f"{BACKEND}/llm_runs/{run_id}/self_check", timeout=SHORT_TIMEOUT
+        )
+        return response.json() if response.status_code == 200 else None
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as error:
+        raise BackendUnavailable() from error
+
+
 def compare_llm_runs(left_id: int, right_id: int) -> list[dict]:
     """Return the pages of two runs side by side."""
     try:

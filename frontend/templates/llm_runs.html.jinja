@@ -323,4 +323,66 @@
 
 {% endif %}
 {% endif %}
+{% if self_check %}
+{% set sc = self_check.summary %}
+<h2 class="section-title">Autovalutazione del modello</h2>
+<p class="section-sub">
+  Al modello è stato ridato l'<strong>HTML grezzo</strong> insieme al Markdown che aveva prodotto,
+  chiedendogli se l'estrazione fosse coerente con la pagina. Il gold standard non entra nella
+  domanda: serve solo per misurare quanto il verdetto ci azzecca.
+</p>
+
+<div class="stats-table-wrap" style="margin-bottom:0.6rem">
+  <table class="stats-table table-dense">
+    <thead>
+      <tr><th>Verdetto</th><th>Pagine</th><th>F1 medio</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="domain-cell"><span class="pill pill-ok">coerente</span></td>
+          <td>{{ sc.passed }}</td><td><strong>{{ num(sc.f1_passed) }}</strong></td></tr>
+      <tr><td class="domain-cell"><span class="pill pill-skip">incoerente</span></td>
+          <td>{{ sc.failed }}</td><td><strong>{{ num(sc.f1_failed) }}</strong></td></tr>
+    </tbody>
+  </table>
+</div>
+<p class="section-sub">
+  Correlazione con l'F1 del gold standard: <strong>{{ num(sc.r_check) }}</strong> il verdetto del
+  modello ({% if sc.cost_eur %}€ {{ '%.4f'|format(sc.cost_eur) }}{% else %}a pagamento{% endif %}),
+  <strong>{{ num(sc.r_grounded) }}</strong> l'ancoraggio, che si calcola in locale e non costa nulla.
+</p>
+
+<details style="margin-bottom:1.25rem">
+<summary class="section-sub" style="cursor:pointer">Le {{ sc.checked }} pagine, una per una</summary>
+<div class="stats-table-wrap" style="margin-top:0.6rem">
+  <table class="stats-table table-dense">
+    <thead>
+      <tr><th>Pagina</th><th>F1</th><th>Ancoraggio</th><th>Verdetto</th>
+          <th style="text-align:left">Motivazione del modello</th></tr>
+    </thead>
+    <tbody>
+      {% for page in self_check.pages %}
+      <tr>
+        <td class="domain-cell" title="{{ page.url }}">{{ page.url|truncate(58, true) }}</td>
+        <td>{{ num(page.f1) }}</td>
+        <td>{% if page.grounded is not none %}{{ '%.2f'|format(page.grounded) }}{% else %}&mdash;{% endif %}</td>
+        <td>
+          {%- if page.check_coherent %}<span class="pill pill-ok">coerente</span>
+          {%- else %}<span class="pill pill-skip">incoerente</span>{% endif %}
+          {%- if page.check_fragments and page.check_fragments > 1 %}
+            <span class="delta-nil">{{ page.check_fragments }} pezzi</span>{% endif %}
+        </td>
+        <td style="text-align:left;font-family:inherit">
+          <!-- La larghezza sta sul div e non sulla cella: una cella di tabella
+               si dimensiona sul contenuto e ignora max-width, quindi il testo
+               allargava la tabella oltre la pagina invece di andare a capo. -->
+          <div style="width:32rem;font-size:0.82rem;line-height:1.4">{{ page.check_notes or '' }}</div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+</details>
+{% endif %}
+
 {% endblock %}

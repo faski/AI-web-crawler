@@ -9,6 +9,7 @@ from ..client import (
     compare_llm_text,
     get_llm_run_domains,
     get_llm_runs,
+    get_llm_self_check,
 )
 from ..templates import templates
 
@@ -45,6 +46,15 @@ def llm_runs_page(
     try:
         runs = get_llm_runs()
         left, right = _default_pair(runs, left, right)
+        # The self-check is a separate, paid pass, so most runs do not have
+        # one. The first run that does is shown; without this the section
+        # would appear empty on a page whose runs were simply never checked.
+        self_check = None
+        for run in runs:
+            found = get_llm_self_check(run["id"])
+            if found:
+                self_check = dict(found, label=run["label"])
+                break
         by_domain = {}
         comparison = []
         if left and right:
@@ -70,6 +80,7 @@ def llm_runs_page(
             "right_run": runs_by_id.get(right),
             "by_domain": by_domain,
             "comparison": comparison,
+            "self_check": self_check,
         },
     )
 
