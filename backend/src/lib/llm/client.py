@@ -100,6 +100,15 @@ class Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost_usd: float = 0.0
+    # Which upstream provider answered, and the id it filed the call under.
+    # OpenRouter is a router, not a model host: the same model id is served by
+    # several companies at different quantisations - fp4, fp8 and bf16 were all
+    # on offer for qwen3.5-9b - and without pinning it picks one per request.
+    # A run that does not record this cannot say which weights produced its
+    # numbers, and two runs of it cannot be compared. Empty on Ollama, which
+    # runs on this machine and has no upstream to name.
+    provider: str = ""
+    generation_id: str = ""
 
 
 def eur_per_usd() -> float:
@@ -416,6 +425,8 @@ def _generate_openrouter(
         raise RuntimeError(f"empty answer from {get_model_name()}: {detail}")
 
     return content, Usage(
+        provider=str(body.get("provider") or ""),
+        generation_id=str(body.get("id") or ""),
         prompt_tokens=int(usage.get("prompt_tokens") or 0),
         completion_tokens=int(usage.get("completion_tokens") or 0),
         cost_usd=float(usage.get("cost") or 0.0),

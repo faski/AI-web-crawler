@@ -82,6 +82,8 @@ def check_page(page: dict, record: dict) -> dict:
         cost_eur=outcome.cost_eur,
         prompt_tokens=outcome.prompt_tokens,
         completion_tokens=outcome.completion_tokens,
+        providers=list(outcome.providers),
+        generation_ids=list(outcome.generation_ids),
         per_fragment=[
             {"complete": v.complete, "coherent": v.coherent, "notes": v.notes}
             for v in outcome.per_fragment
@@ -118,6 +120,36 @@ def mean(values: list[float]) -> float:
     return sum(values) / len(values)
 
 
+def report_providers(results: list[dict]) -> None:
+    """Say who served the run, and complain if that is more than one company.
+
+    OpenRouter routes each request on its own, so a run left unpinned can be
+    answered by several providers serving the same model id at different
+    quantisations - fp4, fp8 and bf16 were all on offer for qwen3.5-9b. The
+    verdicts of such a run cannot be attributed to one model, and comparing it
+    with another run measures the routing as much as the change under test.
+
+    This has to be checked here rather than trusted, because asking for a
+    provider and getting it are different things, and a run that silently
+    changed weights halfway looks exactly like a run that did not.
+    """
+    served: dict[str, int] = {}
+    for record in results:
+        for name in record.get("providers") or []:
+            served[name or "(non dichiarato)"] = served.get(name or "(non dichiarato)", 0) + 1
+    if not served:
+        return
+
+    asked = os.environ.get("OPENROUTER_PROVIDER", "").strip()
+    print(f"\nFORNITORE  richiesto: {asked or 'nessuno (instradamento libero)'}")
+    for name, calls in sorted(served.items(), key=lambda item: -item[1]):
+        print(f"  {name:<24} {calls:>3} chiamate")
+    if len(served) > 1:
+        print("  ATTENZIONE: piu' di un fornitore ha servito questa run, quindi i")
+        print("  suoi numeri non appartengono a un solo modello. Fissare")
+        print("  OPENROUTER_PROVIDER e rifarla prima di usarli per un confronto.")
+
+
 def summarise(results: list[dict], threshold: float) -> None:
     """Print what the check said, and whether it agrees with the gold standard.
 
@@ -136,6 +168,8 @@ def summarise(results: list[dict], threshold: float) -> None:
     # r = +0.06, because answering it means noticing an absence and then
     # deciding whether the extraction rules authorised it, and the model
     # reports the absence without applying the filter.
+    report_providers(ok)
+
     passed = [r for r in ok if r["coherent"]]
     failed = [r for r in ok if not r["coherent"]]
     print(f"\n{'=' * 66}\nAUTOVALUTAZIONE su {len(ok)} pagine")
@@ -222,6 +256,8 @@ def main() -> None:
 
     todo = [r for r in records if r["url"] not in done]
     print(f"modello   {client.get_model_name()}")
+    richiesto = os.environ.get("OPENROUTER_PROVIDER", "").strip()
+    print(f"fornitore {richiesto or 'NESSUNO - instradamento libero, run non confrontabile'}")
     print(f"run       {args.run}  ({run.get('condition')})")
     print(f"budget    {os.environ.get('LLM_PARSER_CONTEXT_TOKENS', 128000)} token")
     print(f"da fare   {len(todo)} pagine su {len(records)}, {args.workers} in parallelo\n")
@@ -236,6 +272,9 @@ def main() -> None:
                     {
                         "model": client.get_model_name(),
                         "provider": os.environ.get("LLM_PROVIDER"),
+                        "provider_pinned": os.environ.get(
+                            "OPENROUTER_PROVIDER", ""
+                        ),
                         "source_run": os.path.basename(args.run),
                         "condition": run.get("condition"),
                         "budget_tokens": int(

@@ -244,6 +244,12 @@ class ParseOutcome:
     call_costs_usd: tuple[float, ...] = ()
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # Who served each call, in the order the calls were made. A tuple and not
+    # a single name because a page read in four pieces can be answered by four
+    # different providers: that is how the routing was caught in the first
+    # place, and a per-page name would have hidden it.
+    providers: tuple[str, ...] = ()
+    generation_ids: tuple[str, ...] = ()
 
     @property
     def cost_usd(self) -> float:
@@ -254,6 +260,16 @@ class ParseOutcome:
     def cost_eur(self) -> float:
         """Return what the whole page cost, in euros at the configured rate."""
         return self.cost_usd * client.eur_per_usd()
+
+    @property
+    def providers_used(self) -> tuple[str, ...]:
+        """Return the distinct providers that served this page, sorted.
+
+        More than one name means the page was not read by a single set of
+        weights, so its numbers are not attributable to one model and should
+        not be averaged with pages that were.
+        """
+        return tuple(sorted({p for p in self.providers if p}))
 
 
 @dataclass(frozen=True)
@@ -272,6 +288,12 @@ class SelfCheckOutcome:
     call_costs_usd: tuple[float, ...] = ()
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # Who served each call, in the order the calls were made. A tuple and not
+    # a single name because a page read in four pieces can be answered by four
+    # different providers: that is how the routing was caught in the first
+    # place, and a per-page name would have hidden it.
+    providers: tuple[str, ...] = ()
+    generation_ids: tuple[str, ...] = ()
 
     @property
     def cost_usd(self) -> float:
@@ -282,6 +304,16 @@ class SelfCheckOutcome:
     def cost_eur(self) -> float:
         """Return what checking this page cost, in euros at the configured rate."""
         return self.cost_usd * client.eur_per_usd()
+
+    @property
+    def providers_used(self) -> tuple[str, ...]:
+        """Return the distinct providers that served this page, sorted.
+
+        More than one name means the page was not read by a single set of
+        weights, so its numbers are not attributable to one model and should
+        not be averaged with pages that were.
+        """
+        return tuple(sorted({p for p in self.providers if p}))
 
 
 def _merge_checks(verdicts: list[SelfCheckResult], total: int) -> SelfCheckResult:
@@ -371,6 +403,8 @@ class LlmParser:
             call_costs_usd=(usage.cost_usd,),
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
+            providers=(usage.provider,),
+            generation_ids=(usage.generation_id,),
         )
 
     def _parse_in_fragments(self, url: str, html_text: str) -> ParseOutcome:
@@ -390,6 +424,8 @@ class LlmParser:
         answers, empty = [], 0
         raw_answers: list[str] = []
         costs: list[float] = []
+        providers: list[str] = []
+        generation_ids: list[str] = []
         prompt_tokens = completion_tokens = 0
         for number, fragment in enumerate(fragments, start=1):
             prompt = build_chunk_prompt(
@@ -405,6 +441,8 @@ class LlmParser:
             )
             raw_answers.append(raw_response)
             costs.append(usage.cost_usd)
+            providers.append(usage.provider)
+            generation_ids.append(usage.generation_id)
             prompt_tokens += usage.prompt_tokens
             completion_tokens += usage.completion_tokens
 
@@ -425,6 +463,8 @@ class LlmParser:
             completion_tokens=completion_tokens,
             grounded=grounded_fraction(text, html_text),
             raw_responses=tuple(raw_answers),
+            providers=tuple(providers),
+            generation_ids=tuple(generation_ids),
         )
 
     def self_check(self, url: str, html_text: str, parsed_text: str) -> SelfCheckResult:
@@ -467,6 +507,8 @@ class LlmParser:
             call_costs_usd=(usage.cost_usd,),
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
+            providers=(usage.provider,),
+            generation_ids=(usage.generation_id,),
         )
 
     def _check_in_fragments(
@@ -477,6 +519,8 @@ class LlmParser:
 
         verdicts: list[SelfCheckResult] = []
         costs: list[float] = []
+        providers: list[str] = []
+        generation_ids: list[str] = []
         prompt_tokens = completion_tokens = 0
         for number, fragment in enumerate(fragments, start=1):
             prompt = build_self_check_fragment_prompt(
@@ -493,6 +537,8 @@ class LlmParser:
             )
             verdicts.append(_parse_self_check(raw_response))
             costs.append(usage.cost_usd)
+            providers.append(usage.provider)
+            generation_ids.append(usage.generation_id)
             prompt_tokens += usage.prompt_tokens
             completion_tokens += usage.completion_tokens
 
@@ -503,6 +549,8 @@ class LlmParser:
             call_costs_usd=tuple(costs),
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            providers=tuple(providers),
+            generation_ids=tuple(generation_ids),
         )
 
     @staticmethod

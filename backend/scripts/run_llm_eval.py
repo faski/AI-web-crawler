@@ -95,6 +95,10 @@ def run_page(page: dict, strip: bool, keep_text: bool) -> dict:
         cost_eur=outcome.cost_eur,
         prompt_tokens=outcome.prompt_tokens,
         completion_tokens=outcome.completion_tokens,
+        # One entry per call. More than one distinct name here means the page
+        # was read by more than one set of weights.
+        providers=list(outcome.providers),
+        generation_ids=list(outcome.generation_ids),
         # Share of the answer found in the page's visible text: a page that
         # describes something else entirely shows up here and nowhere else.
         grounded=outcome.grounded,
@@ -251,7 +255,16 @@ def main() -> None:
             json.dump(
                 {
                     "model": client.get_model_name(),
+                    # What LLM_PROVIDER said, which is only "openrouter" or
+                    # "ollama". The upstream company that actually ran the
+                    # weights is recorded per page, because it can differ from
+                    # one page to the next when it is not pinned.
                     "provider": os.environ.get("LLM_PROVIDER", "ollama"),
+                    # The provider this run asked for, empty when it asked for
+                    # none. Empty is not a neutral default: it lets the router
+                    # choose per request, and the choice changes what the run
+                    # measured.
+                    "provider_pinned": os.environ.get("OPENROUTER_PROVIDER", ""),
                     "condition": condition,
                     "budget_tokens": int(
                         os.environ.get("LLM_PARSER_CONTEXT_TOKENS", 128000)
