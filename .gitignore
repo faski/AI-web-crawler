@@ -3,6 +3,8 @@ __pycache__
 output/
 *.log
 .env
+# I backup del .env contengono la chiave API come l'originale.
+.env.*
 .env.local
 
 # Grader bundle (tarball pesante, non va nel repo)
