@@ -24,14 +24,29 @@ invent a plausible-looking paragraph rather than return an empty string,
 so it is given a word to say instead, and the caller drops it.
 """
 
+# "coherent" decides; "coherence" is the same question as a 0-5 score, kept
+# beside it to compare the two later. The boolean is in charge because four
+# attempts to replace it with the score all let through the one page whose
+# text comes from a <script> instead of the page.
+# "coherence_evidence" makes the judgement point at a passage.
+# "missing" replaced the old "complete" boolean, which was worth nothing:
+# quotes can be checked by code, a feeling cannot.
 SELF_CHECK_SCHEMA = {
     "type": "object",
     "properties": {
-        "notes": {"type": "string"},
-        "complete": {"type": "boolean"},
         "coherent": {"type": "boolean"},
+        "coherence": {"type": "integer", "minimum": 0, "maximum": 5},
+        "coherence_evidence": {"type": "string"},
+        "missing": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+        "notes": {"type": "string"},
     },
-    "required": ["notes", "complete", "coherent"],
+    "required": [
+        "coherent",
+        "coherence",
+        "coherence_evidence",
+        "missing",
+        "notes",
+    ],
 }
 
 
@@ -249,21 +264,55 @@ def build_self_check_prompt(url: str, html_text: str, parsed_text: str) -> str:
 
 {_EXTRACTION_RULES}
 
-        Answer two questions:
+        Answer the coherence question twice, as a yes/no and as a score. They
+        are the same judgement at two resolutions; do not let them disagree.
 
-        - "complete": true if every part of the page's main content is present
-          in the Markdown. False if something the reader would consider part of
-          the article or of the main table is missing.
         - "coherent": true if the Markdown contains only content that really
           appears in the HTML, in the right order, without duplications and
           without leftovers from menus, banners, ads or the footer. False
           otherwise.
 
+        - "coherence": how far that sentence holds, from 0 to 5. A 5 means it
+          holds completely. The lower scores are it failing, by how much:
+
+          4  it holds apart from something trivial: a stray blank heading, one
+             duplicated line
+          3  one clear leftover survived - a menu entry, a cookie banner, an
+             ad, a "related articles" title - or one passage is out of order
+          2  several such leftovers, or a passage of the Markdown does not
+             really appear in the page at all
+          1  much of the Markdown does not appear in the page, or most of what
+             does is furniture rather than content
+          0  the Markdown is about a different subject than this page
+
+        Text inside <script> and <style> is never shown to a reader, so it does
+        not count as appearing in the page.
+
+        Use the whole range. A page you would have called coherent without
+        hesitating is a 5; one you would have passed while a little unsure is a
+        4 or a 3. Do not round to 0 and 5.
+
+        In "coherence_evidence", quote the passage the score is about, copied
+        exactly as it appears. Leave it empty only when the score is 5.
+
+        MISSING is not a judgement, it is a list of quotations. Put in it up to
+        three passages that belong to the page's main content and did NOT reach
+        the Markdown. Copy each one from the HTML **word for word**, at least
+        one full sentence long, so it can be searched for.
+
+        Every quotation will be looked for in the page and in the Markdown by a
+        program. A passage that turns out to be in the Markdown after all, or
+        not on the page at all, counts against this answer. If nothing of the
+        main content is missing, return an empty list - that is the expected
+        answer for a good extraction, not a failure to find something.
+
+        Never quote material the rules above tell the extractor to drop: its
+        absence is the extraction working, not an omission.
+
         Judge only what you can point to in the two inputs. If you cannot find
         a problem in the HTML or in the Markdown, there is no problem.
 
-        In "notes", name the concrete problems you found, in one or two
-        sentences. If you found none, say so.
+        In "notes", summarise in one or two sentences what you found.
 
         Page URL: {url}
 
@@ -274,7 +323,7 @@ def build_self_check_prompt(url: str, html_text: str, parsed_text: str) -> str:
         {parsed_text}
 
         Answer ONLY with a JSON object in this exact format:
-        {{"notes": "<problemi concreti trovati>", "complete": <true|false>, "coherent": <true|false>}}
+        {{"coherent": <true|false>, "coherence": <0-5>, "coherence_evidence": "<passo citato, o vuoto>", "missing": ["<citazione esatta>", ...], "notes": "<riassunto in una o due frasi>"}}
         """
     )
 
@@ -339,23 +388,55 @@ def build_self_check_fragment_prompt(
         see. That is normal and is never a problem. Judge only what this piece
         lets you judge:
 
-        - "complete": true if every part of the page's MAIN CONTENT that is
-          present IN THIS PIECE of HTML also appears in the Markdown. False if
-          this piece contains a paragraph, a heading, a list or a table row
-          that a reader would call part of the article or of the main table,
-          and that is missing from the Markdown. If this piece holds no main
-          content at all - many pieces are nothing but <script> and <style> -
-          then nothing is missing and the answer is true.
-        - "coherent": true unless THIS PIECE proves something wrong. It proves
-          something wrong when text you can see in this piece is a navigation
-          menu, a banner, an advertisement, a "related articles" list or a
-          footer, and that same text appears in the Markdown; or when content
-          of this piece is reproduced in the Markdown distorted, duplicated or
-          out of order. Markdown text you simply cannot find in this piece is
-          NOT a problem: it belongs to another piece. Do not report it.
+        Answer the coherence question twice, as a yes/no and as a score, and do
+        not let them disagree. THIS PIECE can only speak against the Markdown,
+        never for it.
 
-        In "notes", name the concrete problems you found, in one or two
-        sentences, quoting the text at issue. If you found none, say so.
+        - "coherent": true unless THIS PIECE proves the Markdown wrong. It
+          proves it wrong when text you can see in this piece is a navigation
+          menu, a banner, an advertisement, a "related articles" list or a
+          footer and that same text appears in the Markdown; or when content of
+          this piece is reproduced in the Markdown distorted, duplicated or out
+          of order. Markdown text you simply cannot find in this piece is NOT a
+          problem: it belongs to another piece.
+
+        - "coherence": how much this piece proves against it, from 0 to 5. A 5
+          means this piece refutes nothing.
+
+          4  something trivial: one duplicated line, a stray blank heading
+          3  one clear leftover that you can see in THIS HTML - a menu entry, a
+             cookie banner, an ad, a "related articles" title - also appears in
+             the Markdown; or one passage of this piece is reproduced out of
+             order
+          2  several such leftovers from this piece
+          1  most of what this piece contributed to the Markdown is furniture
+             rather than content
+          0  the Markdown distorts this piece beyond recognition
+
+        Text inside <script> and <style> is never shown to a reader, so it does
+        not count as appearing in the page.
+
+        Markdown text you simply cannot find in this piece is NOT a problem: it
+        belongs to another piece, and the score stays 5 on its account. Do not
+        report it.
+
+        In "coherence_evidence", quote the passage the score is about, copied
+        exactly. Leave it empty when the score is 5.
+
+        MISSING is not a judgement, it is a list of quotations. Put in it up to
+        three passages OF THIS PIECE that belong to the page's main content and
+        did NOT reach the Markdown. Copy each one from this HTML **word for
+        word**, at least one full sentence long, so it can be searched for.
+
+        Every quotation will be looked for by a program, in the whole page and
+        in the Markdown. A passage that turns out to be in the Markdown after
+        all, or nowhere on the page, counts against this answer. If this piece
+        holds no main content at all - many pieces are nothing but <script> and
+        <style> - return an empty list.
+
+        Never quote material the rules above tell the extractor to drop.
+
+        In "notes", summarise in one or two sentences what this piece showed.
 
         Page URL: {url}
 
@@ -366,6 +447,6 @@ def build_self_check_fragment_prompt(
         {parsed_text}
 
         Answer ONLY with a JSON object in this exact format:
-        {{"notes": "<problemi concreti trovati>", "complete": <true|false>, "coherent": <true|false>}}
+        {{"coherent": <true|false>, "coherence": <0-5>, "coherence_evidence": "<passo citato, o vuoto>", "missing": ["<citazione esatta>", ...], "notes": "<riassunto in una o due frasi>"}}
         """
     )

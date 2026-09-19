@@ -33,7 +33,7 @@ import os
 import re
 from dataclasses import dataclass, replace
 
-from ..evaluation import grounded_fraction
+from ..evaluation import QuoteCheck, check_quotes, grounded_fraction
 from ..llm import client
 from ..llm.models import SelfCheckResult
 from ..llm.parser_prompt import (
@@ -285,6 +285,8 @@ class SelfCheckOutcome:
     result: SelfCheckResult
     fragments: int
     per_fragment: tuple[SelfCheckResult, ...] = ()
+    # The quotes the model gave, after code looked for them. Empty if none.
+    quote_checks: tuple[QuoteCheck, ...] = ()
     call_costs_usd: tuple[float, ...] = ()
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -294,6 +296,19 @@ class SelfCheckOutcome:
     # place, and a per-page name would have hidden it.
     providers: tuple[str, ...] = ()
     generation_ids: tuple[str, ...] = ()
+
+    @property
+    def omissions(self) -> tuple[QuoteCheck, ...]:
+        """The claimed omissions that turned out to be real."""
+        return tuple(c for c in self.quote_checks if c.is_omission)
+
+    @property
+    def complete(self) -> bool:
+        """True if no quoted passage was really missing.
+
+        The old boolean asked the model how it felt; this checks two strings.
+        """
+        return not self.omissions
 
     @property
     def cost_usd(self) -> float:
@@ -319,24 +334,34 @@ class SelfCheckOutcome:
 def _merge_checks(verdicts: list[SelfCheckResult], total: int) -> SelfCheckResult:
     """Combine per-fragment verdicts into one verdict for the page.
 
-    Both flags are an AND: a page is complete when no piece found anything of
-    its own missing, and coherent when no piece could refute anything. One
-    piece saying no is enough, because the piece that says no is the only one
-    that saw the evidence.
+    The boolean is an AND and the score is the lowest any piece gave: the piece
+    that found the problem is the only one that saw it, so averaging would
+    dilute one real fault into nothing.
 
-    Only the notes of the pieces that reported a problem are kept. Keeping all
-    of them would bury the one sentence that matters under a dozen
-    "no problems found".
+    Quotes are concatenated, since each piece quotes its own HTML, then cut to
+    three because the check reports per page.
+
+    Only the notes of the pieces that objected are kept, or the one that
+    matters is buried under a dozen "nothing found".
     """
+    worst = min(v.coherence for v in verdicts)
+    agreed = all(v.coherent for v in verdicts)
     complaints = [
         f"[pezzo {index}/{total}] {verdict.notes.strip()}"
         for index, verdict in enumerate(verdicts, start=1)
-        if not (verdict.complete and verdict.coherent)
+        if not verdict.coherent or verdict.coherence < 5 or verdict.missing
     ]
+    evidence = next(
+        (v.coherence_evidence for v in verdicts
+         if v.coherence == worst and v.coherence_evidence.strip()),
+        "",
+    )
     return SelfCheckResult(
         model_name=client.get_model_name(),
-        complete=all(v.complete for v in verdicts),
-        coherent=all(v.coherent for v in verdicts),
+        coherent=agreed,
+        coherence=worst,
+        coherence_evidence=evidence,
+        missing=[q for v in verdicts for q in v.missing][:3],
         notes=(
             " ".join(complaints)
             if complaints
@@ -486,8 +511,15 @@ class LlmParser:
         """
         budget = _self_check_budget(parsed_text)
         if estimate_tokens(html_text) <= budget:
-            return self._check_whole(url, html_text, parsed_text)
-        return self._check_in_fragments(url, html_text, parsed_text, budget)
+            outcome = self._check_whole(url, html_text, parsed_text)
+        else:
+            outcome = self._check_in_fragments(url, html_text, parsed_text, budget)
+        # Checked against the whole page, not per fragment: a passage missing
+        # from one piece may be in the next, and we would invent omissions.
+        return replace(
+            outcome,
+            quote_checks=check_quotes(outcome.result.missing, parsed_text, html_text),
+        )
 
     def _check_whole(
         self, url: str, html_text: str, parsed_text: str
@@ -570,10 +602,15 @@ def _parse_self_check(raw_response: str) -> SelfCheckResult:
         return _self_check_fallback(f"No JSON object in reply: {raw_response[:200]}")
     try:
         data = json.loads(match.group(0))
+        # Capped here too: a model listing twenty quotes has stopped choosing
+        # the worst ones and is just listing what it sees.
+        missing = [str(q) for q in (data.get("missing") or [])][:3]
         return SelfCheckResult(
             model_name=client.get_model_name(),
-            complete=bool(data["complete"]),
             coherent=bool(data["coherent"]),
+            coherence=max(0, min(5, int(data["coherence"]))),
+            coherence_evidence=str(data.get("coherence_evidence") or ""),
+            missing=missing,
             notes=str(data["notes"]),
         )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
@@ -583,12 +620,15 @@ def _parse_self_check(raw_response: str) -> SelfCheckResult:
 def _self_check_fallback(notes: str) -> SelfCheckResult:
     """Build a self-check result marking the verdict as unusable.
 
-    Both flags are False so a malformed reply is never counted as a pass; the
-    reason is kept in ``notes`` so it stays visible in the results.
+    Score 0 and coherent False so a broken reply never counts as a pass, with
+    the reason in ``notes``. No quotes: an unreadable answer is not evidence
+    that something is missing.
     """
     return SelfCheckResult(
         model_name=client.get_model_name(),
-        complete=False,
         coherent=False,
+        coherence=0,
+        coherence_evidence="",
+        missing=[],
         notes=notes,
     )

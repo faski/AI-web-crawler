@@ -73,8 +73,24 @@ def check_page(page: dict, record: dict) -> dict:
     result.update(
         status="ok",
         seconds=round(time.monotonic() - started, 1),
-        complete=outcome.result.complete,
+        coherence=outcome.result.coherence,
+        coherence_evidence=outcome.result.coherence_evidence,
         coherent=outcome.result.coherent,
+        # Only to compare the two criteria later; "complete" now comes from
+        # the quote check, not from the model.
+        coherent_by_score=outcome.result.coherent_by_score,
+        complete=outcome.complete,
+        claimed_missing=list(outcome.result.missing),
+        quote_checks=[
+            {
+                "quote": c.quote,
+                "verdict": c.verdict,
+                "in_page": c.in_page,
+                "in_extraction": c.in_extraction,
+            }
+            for c in outcome.quote_checks
+        ],
+        omissions=len(outcome.omissions),
         notes=outcome.result.notes,
         check_fragments=outcome.fragments,
         call_costs_usd=list(outcome.call_costs_usd),
@@ -85,15 +101,22 @@ def check_page(page: dict, record: dict) -> dict:
         providers=list(outcome.providers),
         generation_ids=list(outcome.generation_ids),
         per_fragment=[
-            {"complete": v.complete, "coherent": v.coherent, "notes": v.notes}
+            {"coherence": v.coherence, "missing": list(v.missing), "notes": v.notes}
             for v in outcome.per_fragment
         ],
     )
     verdict = "PASSA" if outcome.result.coherent else "BOCCIA"
+    score = f" coe={outcome.result.coherence}/5"
+    claims = outcome.result.missing
+    if claims:
+        kinds = {}
+        for c in outcome.quote_checks:
+            kinds[c.verdict] = kinds.get(c.verdict, 0) + 1
+        score += " mancanti:" + ",".join(f"{n} {k}" for k, n in sorted(kinds.items()))
     pieces = f" {outcome.fragments} pezzi" if outcome.fragments > 1 else ""
     price = f" EUR {outcome.cost_eur:.4f}" if outcome.cost_usd else ""
     log(
-        f"  [{verdict:6}] {record['url'][:58]:58} f1={record['f1']:.3f} "
+        f"  [{verdict:6}]{score} {record['url'][:46]:46} f1={record['f1']:.3f} "
         f"anc={result['grounded'] if result['grounded'] is not None else float('nan'):.2f}"
         f" {result['seconds']:.0f}s{pieces}{price}"
     )
@@ -188,13 +211,57 @@ def summarise(results: list[dict], threshold: float) -> None:
     anchored = [r for r in ok if r["grounded"] is not None]
     r_anchor = correlation([r["grounded"] for r in anchored],
                            [r["f1"] for r in anchored])
+    r_score = correlation([float(r["coherence"]) for r in ok],
+                          [r["f1"] for r in ok])
+    r_soglia = correlation([float(r.get("coherent_by_score", False)) for r in ok],
+                           [r["f1"] for r in ok])
+
     print(f"\n{'CORRELAZIONE con f1':<34}")
-    print(f"  verdetto (coerenza)        "
+    print(f"  verdetto si/no (decide)    "
           f"{'n/d' if r_check is None else f'{r_check:+.3f}'}")
+    print(f"  voto 0-5 (solo registrato) "
+          f"{'n/d' if r_score is None else f'{r_score:+.3f}'}")
+    print(f"  voto oltre soglia          "
+          f"{'n/d' if r_soglia is None else f'{r_soglia:+.3f}'}")
+    # If the score separates better than the boolean, the verdict can move to
+    # it with a measurement behind the choice.
+    disaccordo = [r for r in ok
+                  if bool(r["coherent"]) != bool(r.get("coherent_by_score"))]
+    print(f"  i due criteri discordano su {len(disaccordo)} pagine su {len(ok)}")
+    for r in disaccordo[:5]:
+        print(f"    {r['url'][:52]:52} f1={r['f1']:.3f} "
+              f"booleano={'passa' if r['coherent'] else 'boccia'} voto={r['coherence']}/5")
     print(f"  completezza (scartata)     "
           f"{'n/d' if r_complete is None else f'{r_complete:+.3f}'}")
     print(f"  ancoraggio (misura locale) "
           f"{'n/d' if r_anchor is None else f'{r_anchor:+.3f}'}  su {len(anchored)} pagine")
+
+    print(f"\n{'DISTRIBUZIONE DELLA COERENZA':<34}")
+    for voto in range(5, -1, -1):
+        gruppo = [r for r in ok if r["coherence"] == voto]
+        if gruppo:
+            print(f"  {voto}/5  {len(gruppo):>3} pagine   f1 medio "
+                  f"{mean([r['f1'] for r in gruppo]):.3f}")
+
+    # Only "confermata" is a real omission; the other two are the model being
+    # wrong, which the old boolean could not show.
+    kinds: dict[str, int] = {}
+    for r in ok:
+        for c in r.get("quote_checks") or []:
+            kinds[c["verdict"]] = kinds.get(c["verdict"], 0) + 1
+    if kinds:
+        print(f"\n{'PASSAGGI CITATI COME MANCANTI':<34}")
+        for kind, n in sorted(kinds.items(), key=lambda t: -t[1]):
+            print(f"  {kind:<14} {n:>3}")
+        con_omissioni = [r for r in ok if r.get("omissions")]
+        senza = [r for r in ok if not r.get("omissions")]
+        print(f"  pagine con almeno una omissione confermata: {len(con_omissioni)}")
+        if con_omissioni and senza:
+            print(f"    con omissioni  f1 medio {mean([r['f1'] for r in con_omissioni]):.3f}")
+            print(f"    senza          f1 medio {mean([r['f1'] for r in senza]):.3f}")
+            r_om = correlation([float(bool(r.get("omissions"))) for r in ok],
+                               [r["f1"] for r in ok])
+            print(f"    correlazione con f1  {'n/d' if r_om is None else f'{r_om:+.3f}'}")
 
     below = [r for r in anchored if r["grounded"] < threshold]
     above = [r for r in anchored if r["grounded"] >= threshold]

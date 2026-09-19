@@ -207,10 +207,17 @@ def main() -> None:
     if args.self_check:
         print()
         started = time.monotonic()
-        verdict = llm_parser.self_check(page["url"], html, parsed_text)
+        # Detailed, because the interesting part is what happened to the
+        # quotes: the bare verdict hides a real omission from an invented one.
+        outcome = llm_parser.self_check_detailed(page["url"], html, parsed_text)
+        verdict = outcome.result
         print(f"--- autovalutazione senza gold standard ({time.monotonic()-started:.0f}s) ---")
-        print(f"  completa  {verdict.complete}")
-        print(f"  coerente  {verdict.coherent}")
+        print(f"  coerenza  {verdict.coherence}/5 ({'passa' if verdict.coherent else 'boccia'})")
+        if verdict.coherence_evidence.strip():
+            print(f"  prova     {verdict.coherence_evidence[:150]}")
+        print(f"  completa  {outcome.complete}")
+        for check in outcome.quote_checks:
+            print(f"    [{check.verdict:12}] {check.quote[:90]}")
         print(f"  note      {verdict.notes}")
 
 

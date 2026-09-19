@@ -94,6 +94,15 @@ def is_anchored(line: str, visible: str) -> bool:
     )
 
 
+def normalised_text(text: str) -> str:
+    """Normalise text the way anchoring compares it.
+
+    Public because the omission check needs the same normalisation: two
+    different ones would disagree about what "present" means.
+    """
+    return _normalise(text)
+
+
 def _normalise(text: str) -> str:
     """Return ``text`` lowercased, stripped of markup noise and punctuation."""
     without_noise = _MARKDOWN_NOISE.sub(" ", text)
