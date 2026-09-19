@@ -9,9 +9,10 @@ class JudgeResult(BaseModel):
     judge_feedback: str
 
 
-# Where the 0-5 score would cut, if it decided the verdict. It does not - the
-# boolean does - but we compute it anyway to compare the two on the same run.
-COHERENT_FROM = 4
+# Where the 0-5 score cuts. 3 and not 4: on the 40-page run level 4 is never
+# used, and moving the cut to 3 raises the correlation with f1 from +0.33 to
+# +0.57. The boolean still decides the verdict; this is the comparison.
+COHERENT_FROM = 3
 
 
 class SelfCheckResult(BaseModel):
