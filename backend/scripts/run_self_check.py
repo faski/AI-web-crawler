@@ -225,6 +225,11 @@ def main() -> None:
     add_provider_flag(parser)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--domain", help="limita a un dominio")
+    parser.add_argument(
+        "--urls",
+        help="file con una URL per riga: controlla solo quelle pagine, cosi' "
+             "una variante di prompt si prova su poche pagine scelte.",
+    )
     parser.add_argument("--limit", type=int, help="controlla solo le prime N pagine")
     parser.add_argument("--threshold", type=float, default=DEFAULT_MIN_GROUNDED,
                         help="soglia di ancoraggio usata nel confronto")
@@ -241,6 +246,18 @@ def main() -> None:
     if missing:
         sys.exit(f"{len(missing)} pagine della run non sono nel gold standard: {missing[:3]}")
 
+    if args.urls:
+        wanted = {
+            line.strip()
+            for line in open(args.urls, encoding="utf-8")
+            if line.strip() and not line.startswith("#")
+        }
+        records = [r for r in records if r["url"] in wanted]
+        # Usually a typo, and running on fewer pages than asked would look
+        # like a cheap run instead of a mistake.
+        absent = wanted - {r["url"] for r in records}
+        if absent:
+            sys.exit(f"{len(absent)} URL non sono nella run: {sorted(absent)[:3]}")
     if args.domain:
         records = [r for r in records if r["domain"] == args.domain]
     if args.limit:
