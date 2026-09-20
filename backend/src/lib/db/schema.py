@@ -94,6 +94,23 @@ LATER_COLUMNS = (
     # is a second pass over the same HTML, so it has its own price.
     "ALTER TABLE llm_page_results ADD COLUMN check_fragments INT",
     "ALTER TABLE llm_page_results ADD COLUMN check_cost_eur DOUBLE",
+    # Which provider served each call, and the id it gave the generation.
+    # JSON arrays with one entry per call: a page read in four pieces can be
+    # served by four different providers unless one is pinned, and without
+    # this the run cannot say which.
+    "ALTER TABLE llm_page_results ADD COLUMN providers TEXT",
+    "ALTER TABLE llm_page_results ADD COLUMN generation_ids TEXT",
+    # The 0-5 coherence score, beside the yes/no verdict. The two are the same
+    # question asked twice: the boolean decides, the score is kept because it
+    # is steadier across runs. evidence is the passage the score is about.
+    "ALTER TABLE llm_page_results ADD COLUMN check_coherence TINYINT",
+    "ALTER TABLE llm_page_results ADD COLUMN check_coherence_evidence TEXT",
+    # The passages the model said were missing, and what the code found when
+    # it looked for them: a JSON array of verdicts (confirmed, present,
+    # invented, too short). A claim is not an omission until code says so.
+    "ALTER TABLE llm_page_results ADD COLUMN check_claimed_missing TEXT",
+    "ALTER TABLE llm_page_results ADD COLUMN check_quote_verdicts TEXT",
+    "ALTER TABLE llm_page_results ADD COLUMN check_omissions INT",
     "ALTER TABLE llm_runs ADD COLUMN eur_per_usd DOUBLE",
     # Cost known for the run as a whole but not page by page. Runs made
     # before the per-call accounting existed can still report what they cost,

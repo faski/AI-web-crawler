@@ -16,6 +16,7 @@ _PAGE_FIELDS = (
     "url", "domain", "status", "input_tokens", "html_kb", "seconds",
     "cpu_seconds", "chars", "fragments", "empty_fragments",
     "cost_usd", "cost_eur", "call_costs_usd", "prompt_tokens", "completion_tokens",
+    "providers", "generation_ids",
     "grounded",
     "precision_val", "recall_val", "f1", "cosine", "jaccard", "excess_ratio",
     "extracted_count", "sample_count", "parsed_text", "note",
@@ -80,6 +81,12 @@ def save_run(
                 else None,
                 record.get("prompt_tokens"),
                 record.get("completion_tokens"),
+                # JSON text like call_costs_usd: one entry per call, read
+                # back whole to say which provider served the page.
+                json.dumps(record["providers"]) if record.get("providers") else None,
+                json.dumps(record["generation_ids"])
+                if record.get("generation_ids")
+                else None,
                 record.get("grounded"),
                 record.get("precision"),
                 record.get("recall"),
@@ -247,6 +254,9 @@ def attach_self_check(run_id: int, results: list[dict]) -> int:
             UPDATE llm_page_results
                SET check_complete = ?, check_coherent = ?, check_notes = ?,
                    check_fragments = ?, check_cost_eur = ?,
+                   check_coherence = ?, check_coherence_evidence = ?,
+                   check_claimed_missing = ?, check_quote_verdicts = ?,
+                   check_omissions = ?,
                    grounded = COALESCE(?, grounded)
              WHERE run_id = ? AND url = ?
             """,
@@ -256,6 +266,15 @@ def attach_self_check(run_id: int, results: list[dict]) -> int:
                 result.get("notes"),
                 result.get("check_fragments"),
                 result.get("cost_eur"),
+                result.get("coherence"),
+                result.get("coherence_evidence"),
+                json.dumps(result["claimed_missing"])
+                if result.get("claimed_missing")
+                else None,
+                json.dumps(result["quote_checks"])
+                if result.get("quote_checks")
+                else None,
+                result.get("omissions"),
                 result.get("grounded"),
                 run_id,
                 result["url"],
