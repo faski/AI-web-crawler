@@ -144,15 +144,21 @@ def build_parser_prompt(url: str, html_text: str) -> str:
 
         Before answering, check these again - they are the ones most often
         missed on a long page:
-        1. STOP at the first heading named Note, Notes, References,
-           Riferimenti, Bibliografia, Fonti, Voci correlate, See also, Altri
-           progetti, Collegamenti esterni, External links, Controllo di
-           autorita, Authority control, or a category list. Nothing from there
-           to the end of the page belongs in the answer.
-        2. No infobox, no summary box, no fact sheet beside the first
+        1. No infobox, no summary box, no fact sheet beside the first
            paragraph. A '|' table only if the table is what the page is about.
-        3. No raw HTML tags or attributes anywhere in the answer.
-        4. Copy the words verbatim; remove footnote markers like [1] or [23].
+        2. No raw HTML tags or attributes anywhere in the answer.
+        3. Copy the words verbatim; remove footnote markers like [1] or [23].
+
+        LAST STEP, ON THE ANSWER YOU HAVE JUST WRITTEN. Go through its
+        headings from the top and find the FIRST one named Note, Notes,
+        References, Riferimenti, Bibliografia, Bibliography, Fonti, Sources,
+        Further reading, Voci correlate, See also, Altri progetti,
+        Collegamenti esterni, External links, Controllo di autorita,
+        Authority control, or introducing a list of categories. DELETE that
+        heading and everything after it, to the end of the answer: the
+        apparatus sits at the bottom and there is often more than one
+        section of it. Keep every line above that heading unchanged - that
+        part is the article.
 
         Answer with the Markdown ONLY.
         """
