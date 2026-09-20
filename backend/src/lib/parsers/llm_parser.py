@@ -59,8 +59,9 @@ PROMPT_OVERHEAD_TOKENS = 2000
 # Room set aside for the self-check answer. The reply is one small JSON
 # object, but a model that reasons before answering spends tokens doing it,
 # and a truncated reply is scored as a failed check rather than as a page
-# with a problem, which would be a lie about the page.
-SELF_CHECK_ANSWER_TOKENS = 1024
+# with a problem, which would be a lie about the page. 1024 was not enough:
+# one page in 260 quoted a long passage and the JSON was cut mid-string.
+SELF_CHECK_ANSWER_TOKENS = 2048
 
 # A fenced block wrapping the whole answer, which models add even when told
 # not to. Only an outer fence is removed: see _clean_markdown.
