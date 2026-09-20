@@ -36,7 +36,9 @@ SELF_CHECK_SCHEMA = {
     "properties": {
         "coherent": {"type": "boolean"},
         "coherence": {"type": "integer", "minimum": 0, "maximum": 5},
-        "coherence_evidence": {"type": "string"},
+        # Capped: asked for "the passage", a model pastes half the page and
+        # the reply is cut mid-string, which is scored as a failed check.
+        "coherence_evidence": {"type": "string", "maxLength": 300},
         "missing": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
         "notes": {"type": "string"},
     },
@@ -299,7 +301,9 @@ def build_self_check_prompt(url: str, html_text: str, parsed_text: str) -> str:
         4 or a 3. Do not round to 0 and 5.
 
         In "coherence_evidence", quote the passage the score is about, copied
-        exactly as it appears. Leave it empty only when the score is 5.
+        exactly as it appears. ONE sentence, 200 characters at most: if the
+        problem spans more, quote where it starts. Leave it empty only when
+        the score is 5.
 
         MISSING is not a judgement, it is a list of quotations. Put in it up to
         three passages that belong to the page's main content and did NOT reach
@@ -427,7 +431,8 @@ def build_self_check_fragment_prompt(
         report it.
 
         In "coherence_evidence", quote the passage the score is about, copied
-        exactly. Leave it empty when the score is 5.
+        exactly. ONE sentence, 200 characters at most: if the problem spans
+        more, quote where it starts. Leave it empty when the score is 5.
 
         MISSING is not a judgement, it is a list of quotations. Put in it up to
         three passages OF THIS PIECE that belong to the page's main content and
