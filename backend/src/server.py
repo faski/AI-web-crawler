@@ -6,6 +6,7 @@ Run from the backend/ directory:
 Startup sequence (lifespan):
     1. wait for MariaDB, open the connection pool, create missing tables
     2. seed the gold standard tables from gs_data/ on first boot
+    3. seed the evaluation runs from runs_data/ on first boot
     3. precompute and cache quantitative metrics for every GS URL
     4. start the shared crawler browser so the first parse is fast
 """
@@ -15,7 +16,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .lib import close_crawler, get_crawler
-from .lib.db import apply_schema, close_pool, init_pool, populate_if_empty
+from .lib.db import (
+    apply_schema,
+    close_pool,
+    init_pool,
+    populate_if_empty,
+    populate_runs_if_empty,
+)
 from .lib.precompute import precompute_quantitative_evaluations
 from .routes import (
     domains_router,
@@ -34,6 +41,11 @@ async def lifespan(app: FastAPI):
     inserted_count = populate_if_empty()
     if inserted_count:
         print(f"[startup] seeded {inserted_count} gold standard entries", flush=True)
+    # The results measured on those pages. Seeded only when there is nothing:
+    # a run imported later must not be overwritten on the next boot.
+    seeded_runs = populate_runs_if_empty()
+    if seeded_runs:
+        print(f"[startup] seeded {seeded_runs} evaluation runs", flush=True)
     precomputed = await precompute_quantitative_evaluations()
     if precomputed:
         print(f"[startup] precomputed {precomputed} quantitative evaluations", flush=True)

@@ -15,6 +15,39 @@ make envs
 
 This creates two conda environments (`creeping-crawler-backend` and `creeping-crawler-frontend`) and installs all dependencies.
 
+## Configuration
+
+Everything has a working default, so `make up` runs the whole stack with no
+configuration at all. Settings live in `.env`, which is not in the repository
+because it holds an API key:
+
+```bash
+cp .env.example .env
+```
+
+`.env.example` documents every variable. Two of them decide what the LLM
+parser can do:
+
+| Variable | Default | What it changes |
+|---|---|---|
+| `PARSE_WITH_LLM` | `0` | Lets the `/parser` page call a model for a **new** extraction. Off, because such a call either costs money or takes minutes. |
+| `LLM_PROVIDER` | `ollama` | Who answers: the local model, or `openrouter` with `OPENROUTER_API_KEY`. |
+
+Without any of this the LLM parser still works on the forty gold standard
+pages. The first boot seeds the database from two tracked directories - the
+pages from `gs_data/` and the finished runs from `runs_data/` - so `/parser`
+can show the Markdown the model really produced and `/llm-runs` has something
+to compare. Only a **new** extraction needs the two settings above.
+
+Both are seeded once and never again: a run imported later is not overwritten
+on the next boot.
+
+A warning about the local model. It runs on CPU inside Docker, with no GPU,
+at roughly 25 tokens per second: the smallest page of the gold standard is
+75,000 tokens, so reading it alone would take about 50 minutes and in
+practice the request times out. The measurements in this project were made
+against a remote provider for that reason.
+
 ## Running
 
 **With Docker Compose (recommended):**
@@ -112,7 +145,7 @@ frontend/
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/parse` | Parse `{url, local?}` — live crawl or local DB |
+| POST | `/parse` | Parse `{url, local?, parser?, fresh?}` — `parser` is `crawl4ai` or `llm`, `fresh` asks the model again instead of reading a stored extraction |
 | GET | `/domains` | List supported domains |
 | GET | `/gold_standard?url=` | Gold standard entry for a URL |
 | GET | `/gold_standard_urls?domain=` | GS URLs for a domain |
@@ -125,9 +158,51 @@ frontend/
 | DELETE | `/gold_standard` | Remove `{url}` from gold_standard only |
 | GET | `/db_stats` | Per-domain counts and average evaluations |
 | GET | `/db_schema` | JSON description of the DB tables |
-| GET | `/status` | Health of backend / database / ollama |
+| GET | `/status` | Health of backend / database / ollama, plus whether the LLM parser is allowed and who would answer |
+| GET | `/llm_runs` | Stored LLM-parser runs with their headline numbers |
+| GET | `/llm_runs/{id}/pages` | One run page by page; `/domains` and `/self_check` give the same run by domain and its self-check |
+| GET | `/llm_runs/compare?left=&right=` | Two runs side by side; `/compare_text` adds the text of one page |
 
-Errors: `400` unsupported domain · `404` URL not in DB · `502` unreachable URL.
+Errors: `400` unsupported domain · `403` LLM parser off · `404` URL not in DB · `413` HTML over the context budget · `502` unreachable URL or unusable model answer.
+
+## LLM-guided parsing
+
+Besides the Crawl4AI pipeline the project includes a second parser: the raw
+HTML goes to a language model, which returns the page's main content as
+Markdown. The two can be compared on the same pages and against the same gold
+standard.
+
+- `/parser` runs either pipeline on a single URL and scores the result. For a
+  gold standard URL the LLM side shows the extraction stored by a finished
+  run, which costs nothing; `PARSE_WITH_LLM=1` is only needed to ask for a
+  new one.
+- `/llm-runs` compares whole runs: quality, speed and cost, page by page,
+  plus the model's own check of its extractions.
+
+A run is produced from the command line and then imported:
+
+```bash
+python scripts/run_llm_eval.py --out output/run.json --chunk --openrouter
+python scripts/run_self_check.py --run output/run.json \
+    --out output/selfcheck.json --openrouter
+python scripts/import_llm_run.py output/run.json --label "Qwen 3.5 9B"
+python scripts/import_self_check.py output/selfcheck.json \
+    --run-label "Qwen 3.5 9B"
+```
+
+`--openrouter` is required every time: without it the scripts use the local
+model, so no run can spend money by accident.
+
+A run that should ship with the project is then written to `runs_data/`,
+which the next clone loads on first boot:
+
+```bash
+python scripts/export_run_seed.py --all
+```
+
+The seed files hold what the pages show - the extracted Markdown, the scores,
+the self-check verdicts - and about 400 KB each. The raw HTML is not in them:
+it already travels in `gs_data/`.
 
 ## Supported domains
 

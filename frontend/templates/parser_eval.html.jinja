@@ -48,6 +48,46 @@
     </div>
   </div>
 
+  <div class="field" style="margin-top:1rem;">
+    <label>Parser</label>
+    <div class="mode-toggle">
+      <label class="mode-option">
+        <input type="radio" name="parser" value="crawl4ai" {% if selected_parser != 'llm' %}checked{% endif %}>
+        <span>Crawl4AI</span>
+        <small>markdown + parser di dominio</small>
+      </label>
+      <label class="mode-option">
+        <input type="radio" name="parser" value="llm"
+               {% if selected_parser == 'llm' %}checked{% endif %}>
+        <span>LLM</span>
+        <small>HTML grezzo al modello</small>
+      </label>
+    </div>
+    <p class="section-sub" style="margin-top:0.4rem">
+      Il parser LLM manda l'<strong>HTML grezzo</strong> al modello e si fa restituire
+      il Markdown: &egrave; la modifica 3a, la stessa via che misurano le run in
+      <a href="/llm-runs">confronto parser</a>.
+      Per le <strong>40 pagine del gold standard</strong> viene mostrata l'estrazione
+      gi&agrave; calcolata da quelle run: &egrave; il testo che il modello ha davvero
+      prodotto, si legge subito e non costa nulla.
+      {%- if llm_available and llm_remote %}
+        Per una URL fuori dal gold standard viene chiamato
+        <strong>{{ llm_model }}</strong> su OpenRouter, e quella
+        <strong>&egrave; una chiamata a pagamento</strong>.
+      {%- elif llm_available %}
+        Per una URL fuori dal gold standard viene chiamato
+        <strong>{{ llm_model }}</strong> in locale: non costa nulla, ma su questa
+        macchina il modello legge circa 25 token al secondo, quindi una pagina
+        richiede <strong>decine di minuti</strong> e spesso va in timeout.
+      {%- else %}
+        Una <strong>nuova</strong> estrazione, su una URL fuori dal gold standard o
+        rifacendo una di queste, richiede <code>PARSE_WITH_LLM=1</code> nel file
+        <code>.env</code>: &egrave; una chiamata che costa o che fa attendere, quindi
+        non parte da sola.
+      {%- endif %}
+    </p>
+  </div>
+
   <button type="submit" class="btn-primary" style="margin-top:1rem;">Esegui parsing e valutazione</button>
 </form>
 
@@ -71,6 +111,57 @@
       <a href="{{ result.url }}" target="_blank" rel="noopener" class="result-url">{{ result.url }}</a>
     </div>
 
+    <p class="section-sub">
+      Estratto con
+      {%- if data.parser == 'llm' and data.source == 'stored' %}
+        <strong>il parser LLM</strong>, e questo testo &egrave; quello che
+        <strong>{{ data.model }}</strong> ha prodotto nella run
+        <strong>{{ data.run_label }}</strong> del {{ data.run_date }}. Leggerlo non
+        costa nulla e non chiama nessun modello.
+        {%- if data.fragments and data.fragments > 1 %}
+          Allora la pagina non entrava nel contesto e fu letta in
+          <strong>{{ data.fragments }} pezzi</strong>.
+        {%- endif %}
+        {%- if data.seconds %} <strong>Quella</strong> estrazione richiese
+          {{ '%.0f'|format(data.seconds) }} s{% if data.cost_eur %} e cost&ograve;
+          &euro; {{ '%.4f'|format(data.cost_eur) }}{% endif %}.
+        {%- endif %}
+        {%- if data.grounded is not none %}
+          Ancoraggio: <strong>{{ '%.0f'|format(data.grounded * 100) }}%</strong> delle
+          righe lunghe si ritrova nel testo visibile della pagina.
+        {%- endif %}
+        {%- if llm_available %}
+        <a href="/parser?url={{ result.url | urlencode }}&mode={{ result.mode }}&parser=llm&fresh=1">Rifai
+        l'estrazione adesso</a>.
+        {%- else %}
+        <!-- Niente link quando il cancello e' chiuso: cliccarlo ricaricherebbe
+             lo stesso testo salvato, e un bottone che non fa niente sembra
+             rotto. La frase dice cosa servirebbe. -->
+        Per rifarla adesso serve <code>PARSE_WITH_LLM=1</code> nel file
+        <code>.env</code>.
+        {%- endif %}
+      {%- elif data.parser == 'llm' %}
+        <strong>il parser LLM</strong>, chiamato adesso: l'HTML grezzo &egrave; andato a
+        <strong>{{ data.model or 'un modello' }}</strong>
+        {%- if data.provider %}, servito da <strong>{{ data.provider }}</strong>
+        {%- else %}, in esecuzione <strong>locale</strong>{% endif %}.
+        {%- if data.fragments and data.fragments > 1 %}
+          La pagina non entrava nel contesto ed &egrave; stata letta in
+          <strong>{{ data.fragments }} pezzi</strong>.
+        {%- endif %}
+        {%- if data.seconds %} Tempo: <strong>{{ '%.0f'|format(data.seconds) }} s</strong>.{% endif %}
+        {%- if data.cost_eur %} Costo: <strong>&euro; {{ '%.4f'|format(data.cost_eur) }}</strong>.
+        {%- elif not data.provider %} Nessun costo fatturato: gira su questa macchina.{% endif %}
+        {%- if data.grounded is not none %}
+          Ancoraggio: <strong>{{ '%.0f'|format(data.grounded * 100) }}%</strong> delle righe
+          lunghe si ritrova nel testo visibile della pagina.
+        {%- endif %}
+      {%- else %}
+        <strong>Crawl4AI</strong> pi&ugrave; il parser di dominio scritto a mano. Gira in
+        locale e non costa niente a chiamata.
+      {%- endif %}
+    </p>
+
     <section class="panels-grid">
       <div class="panel">
         <div class="panel-header">
@@ -81,7 +172,7 @@
       </div>
       <div class="panel">
         <div class="panel-header">
-          <span>Output parser (Markdown)</span>
+          <span>Output {% if result.data.parser == 'llm' %}LLM{% else %}parser{% endif %} (Markdown)</span>
           <span class="panel-info">{{ data.parsed_text.split()|length }} parole</span>
         </div>
         <div class="panel-body"><pre>{{ data.parsed_text | e }}</pre></div>

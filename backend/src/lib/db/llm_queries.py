@@ -101,6 +101,92 @@ def save_run(
     return run_id
 
 
+# Columns of llm_page_results as the seed files carry them: whatever the
+# table holds, minus run_id, which the insert assigns. Read from the database
+# rather than listed here, so a column added later is exported and seeded
+# without anyone having to remember this list.
+def _page_columns() -> list[str]:
+    """Return the columns of llm_page_results, except run_id."""
+    return [
+        row[0]
+        for row in fetch_all(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = DATABASE() AND table_name = 'llm_page_results'
+              AND column_name <> 'run_id'
+            ORDER BY ordinal_position
+            """,
+            (),
+        )
+    ]
+
+
+def export_run(run_id: int) -> dict | None:
+    """Return one run and all its pages, ready to be written to a seed file.
+
+    The shape mirrors the tables, so exporting and seeding are the same
+    columns in both directions and nothing has to be translated on the way.
+    """
+    run = fetch_one(
+        """
+        SELECT label, model_name, provider, condition_name, budget_tokens,
+               eur_per_usd, measured_cost_eur, created_at
+        FROM llm_runs WHERE id = ?
+        """,
+        (run_id,),
+    )
+    if run is None:
+        return None
+    columns = _page_columns()
+    rows = fetch_all(
+        f"SELECT {', '.join(columns)} FROM llm_page_results WHERE run_id = ?",
+        (run_id,),
+    )
+    return {
+        "label": run[0], "model_name": run[1], "provider": run[2],
+        "condition_name": run[3], "budget_tokens": run[4],
+        "eur_per_usd": run[5], "measured_cost_eur": run[6],
+        "created_at": str(run[7]),
+        "pages": [dict(zip(columns, row)) for row in rows],
+    }
+
+
+def save_seed_run(data: dict) -> int:
+    """Insert a run exported by ``export_run``. Returns the new run id.
+
+    Only the columns the file actually carries are written, so a seed made
+    before a column existed still loads instead of failing on a missing key.
+    """
+    connection = get_connection()
+    command = connection.cursor()
+    command.execute(
+        """
+        INSERT INTO llm_runs
+            (label, model_name, provider, condition_name, budget_tokens,
+             eur_per_usd, measured_cost_eur, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (data["label"], data["model_name"], data["provider"],
+         data["condition_name"], data["budget_tokens"],
+         data.get("eur_per_usd"), data.get("measured_cost_eur"),
+         data.get("created_at")),
+    )
+    run_id = command.lastrowid
+
+    known = set(_page_columns())
+    for page in data.get("pages", []):
+        columns = [c for c in page if c in known]
+        placeholders = ", ".join(["?"] * (len(columns) + 1))
+        command.execute(
+            f"INSERT INTO llm_page_results (run_id, {', '.join(columns)}) "
+            f"VALUES ({placeholders})",
+            (run_id, *(page[c] for c in columns)),
+        )
+    connection.commit()
+    connection.close()
+    return run_id
+
+
 def list_runs() -> list[dict]:
     """Return every stored run with its headline numbers, newest first.
 
@@ -414,6 +500,41 @@ def _decode_json(raw: str | None, fallback: list) -> list:
     except (json.JSONDecodeError, TypeError):
         return fallback
     return decoded if isinstance(decoded, list) else fallback
+
+
+def get_stored_extraction(url: str) -> dict | None:
+    """Return the newest LLM extraction stored for ``url``, or None.
+
+    The runs already hold the Markdown the model produced for all forty gold
+    standard pages, so the page can show a real LLM extraction without paying
+    for a call or making anyone wait minutes. It is a stored result and the
+    caller has to say so: presenting it as a live parse would be a lie about
+    where the text came from.
+
+    Only runs made through a model count. The Crawl4AI baseline is stored the
+    same way, and returning it here would show the other pipeline's output
+    under the LLM label.
+    """
+    row = fetch_one(
+        """
+        SELECT p.parsed_text, r.label, r.model_name, r.created_at, p.f1,
+               p.seconds, p.cost_eur, p.fragments, p.grounded
+        FROM llm_page_results p
+        JOIN llm_runs r ON r.id = p.run_id
+        WHERE p.url = ? AND p.status = 'ok' AND p.parsed_text IS NOT NULL
+          AND r.provider <> 'locale'
+        ORDER BY r.created_at DESC, r.id DESC
+        LIMIT 1
+        """,
+        (url,),
+    )
+    if row is None:
+        return None
+    return {
+        "parsed_text": row[0], "run_label": row[1], "model": row[2],
+        "run_date": str(row[3])[:10], "f1": row[4], "seconds": row[5],
+        "cost_eur": row[6], "fragments": row[7], "grounded": row[8],
+    }
 
 
 def get_page_text(run_id: int, url: str) -> str | None:

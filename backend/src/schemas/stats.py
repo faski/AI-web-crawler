@@ -18,3 +18,9 @@ class HealthResponse(BaseModel):
     backend: str
     database: str
     ollama: str
+    # Not health checks but settings: whether the page may parse with the
+    # model, and who would answer. The UI needs all three to say what a click
+    # does, since local and remote differ in cost and in how long they take.
+    llm_parser: bool = False
+    llm_provider: str = "ollama"
+    llm_model: str = ""

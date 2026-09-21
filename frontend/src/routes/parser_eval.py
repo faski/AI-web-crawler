@@ -10,6 +10,7 @@ from ..client import (
     get_domains,
     get_gold_standard,
     get_gs_urls,
+    get_status,
     parse_url,
 )
 from ..templates import templates
@@ -22,10 +23,28 @@ def parser_eval(
     request: Request,
     url: str = Query(default=""),
     mode: str = Query(default="live"),
+    parser: str = Query(default="crawl4ai"),
+    fresh: int = Query(default=0),
 ):
-    """Parse a URL (live or local), evaluate against GS if available, return results."""
+    """Parse a URL (live or local), evaluate against GS if available, return results.
+
+    ``parser`` chooses the pipeline: Crawl4AI plus a domain parser, or the raw
+    HTML straight to a model. The backend has the last word on whether the
+    second is allowed; the page only reads that setting to decide what to
+    offer.
+    """
     try:
         domains = get_domains()
+        stato = get_status()
+        llm_available = bool(stato.get("llm_parser"))
+        # Who would answer, so the page can say what a click costs instead
+        # of assuming it is the paid one.
+        llm_remote = stato.get("llm_provider") == "openrouter"
+        llm_model = stato.get("llm_model") or ""
+        # A stored extraction can always be read: it costs nothing and is
+        # already there. Only asking the model again goes through the gate.
+        if parser == "llm" and fresh and not llm_available:
+            fresh = 0
         # URLs grouped by domain, so the page can show two linked dropdowns
         # (pick a domain, then pick one of its URLs).
         gs_urls_by_domain = {domain: get_gs_urls(domain) for domain in domains}
@@ -38,8 +57,11 @@ def parser_eval(
         result = None
         if url.strip():
             local = mode == "local"
-            data, error = parse_url(url.strip(), local=local)
-            result = {"data": data, "error": error, "url": url.strip(), "mode": mode}
+            data, error = parse_url(
+                url.strip(), local=local, parser=parser, fresh=bool(fresh)
+            )
+            result = {"data": data, "error": error, "url": url.strip(),
+                      "mode": mode, "parser": parser}
 
             if not error:
                 # The backend already returns the markdown-stripped text.
@@ -73,5 +95,10 @@ def parser_eval(
             "result": result,
             "selected_url": url.strip(),
             "selected_mode": mode,
+            "selected_parser": parser,
+            "llm_available": llm_available,
+            "llm_remote": llm_remote,
+            "llm_model": llm_model,
+            "selected_fresh": bool(fresh),
         },
     )

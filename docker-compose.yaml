@@ -84,6 +84,14 @@ services:
       # Off by default: a page that does not fit is reported as too long
       # rather than read in pieces, which is what every recorded run did.
       LLM_PARSER_CHUNKING: ${LLM_PARSER_CHUNKING:-0}
+      # Quanto il budget viene diviso per coprire l'errore della stima dei
+      # token. 1.0 rimette il budget con cui sono state fatte le run gia'
+      # registrate.
+      LLM_TOKEN_SAFETY: ${LLM_TOKEN_SAFETY:-}
+      # Permette alla pagina /parser di estrarre con il modello invece che
+      # con Crawl4AI. Spento di default, perche' una pagina web la apre
+      # chiunque: su OpenRouter ogni clic costa, in locale resta appeso.
+      PARSE_WITH_LLM: ${PARSE_WITH_LLM:-0}
       LLM_EUR_PER_USD: ${LLM_EUR_PER_USD:-}
       # What running something locally costs, for the comparison against a
       # billed provider. Facts about one laptop and one electricity contract,

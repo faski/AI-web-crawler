@@ -217,6 +217,10 @@ textarea { font-family: var(--mono); font-size: 0.88rem; resize: vertical; }
 .mode-option small { color: var(--text-muted); font-size: 0.75rem; margin-top: 0.1rem; }
 .mode-option:has(input:checked) { border-color: var(--bordeaux); background: var(--bordeaux-soft); }
 .mode-option:hover { border-color: var(--bordeaux); }
+/* Una scelta che il backend non permette. Resta visibile invece di
+   sparire: sapere che il parser LLM esiste, ma e' spento, dice di piu'. */
+.mode-option-off { opacity: 0.5; cursor: not-allowed; }
+.mode-option-off:hover { border-color: var(--border-strong); }
 
 .btn-primary, .btn-danger {
   display: inline-flex;

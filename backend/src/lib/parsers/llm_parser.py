@@ -126,18 +126,18 @@ def estimate_tokens(text: str) -> int:
     to 26% on a page full of inline JSON. A margin has to be added on top; see
     DEFAULT_TOKEN_SAFETY.
     """
-    ratio = float(os.environ.get("LLM_CHARS_PER_TOKEN", DEFAULT_CHARS_PER_TOKEN))
+    ratio = client.env_number("LLM_CHARS_PER_TOKEN", DEFAULT_CHARS_PER_TOKEN)
     return int(len(text) / ratio)
 
 
 def _context_budget() -> int:
     """Return the input budget in tokens."""
-    return int(os.environ.get("LLM_PARSER_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
+    return client.env_number("LLM_PARSER_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS, int)
 
 
 def _max_tokens() -> int:
     """Return the cap on the generated Markdown."""
-    return int(os.environ.get("LLM_PARSER_MAX_TOKENS", DEFAULT_MAX_TOKENS))
+    return client.env_number("LLM_PARSER_MAX_TOKENS", DEFAULT_MAX_TOKENS, int)
 
 
 def _token_safety() -> float:
@@ -147,7 +147,7 @@ def _token_safety() -> float:
     corpus, which is not a fact about this code. 1.0 gives back the budget the
     earlier runs used.
     """
-    return float(os.environ.get("LLM_TOKEN_SAFETY", DEFAULT_TOKEN_SAFETY))
+    return client.env_number("LLM_TOKEN_SAFETY", DEFAULT_TOKEN_SAFETY)
 
 
 def _chunking_enabled() -> bool:

@@ -5,12 +5,14 @@ Modules:
   models       Pydantic models returned by read queries
   queries      SQL queries (read/write) over web_resources and gold_standard
   init_loader  one-shot bootstrap from gs_data/*_gs.json files
+  runs_loader  one-shot bootstrap of the runs from runs_data/*.json
   schema       tables added after init.sql, created at startup
   llm_queries  storage of the LLM-parser evaluation runs
 """
 
 from .connection import close_pool, get_connection, init_pool, ping
 from .init_loader import populate_if_empty
+from .runs_loader import populate_if_empty as populate_runs_if_empty
 from .models import GoldStandardEntry, WebResource
 from .schema import apply_schema
 
@@ -20,6 +22,7 @@ __all__ = [
     "init_pool",
     "ping",
     "populate_if_empty",
+    "populate_runs_if_empty",
     "apply_schema",
     "GoldStandardEntry",
     "WebResource",

@@ -13,6 +13,8 @@ BACKEND = os.environ.get("BACKEND_URL", "http://127.0.0.1:8003")
 
 SHORT_TIMEOUT = 5
 PARSE_TIMEOUT = 60
+# A page read by a remote model, in fragments if it is long.
+LLM_PARSE_TIMEOUT = 900
 JUDGE_TIMEOUT = 240
 
 
@@ -74,13 +76,24 @@ def get_db_stats() -> dict:
 
 # ─── Parse + evaluate ────────────────────────────────────────────────────────
 
-def parse_url(url: str, local: bool = False) -> tuple[dict, str | None]:
-    """Parse a URL via the backend. Returns ``(data, None)`` or ``({}, error_message)``."""
+def parse_url(
+    url: str, local: bool = False, parser: str = "crawl4ai", fresh: bool = False
+) -> tuple[dict, str | None]:
+    """Parse a URL via the backend. Returns ``(data, None)`` or ``({}, error_message)``.
+
+    The LLM parser reads a whole page with a model, which takes minutes on a
+    long one, so it gets its own timeout. Sixty seconds would report a working
+    call as a dead backend.
+    """
     try:
         response = requests.post(
             f"{BACKEND}/parse",
-            json={"url": url, "local": local},
-            timeout=PARSE_TIMEOUT,
+            json={"url": url, "local": local, "parser": parser, "fresh": fresh},
+            # Only a fresh LLM call is slow. Reading a stored extraction is a
+            # SELECT, and giving it fifteen minutes would hide a dead backend.
+            timeout=(
+                LLM_PARSE_TIMEOUT if parser == "llm" and fresh else PARSE_TIMEOUT
+            ),
         )
         if response.status_code != 200:
             return {}, response.json().get("detail", f"Backend error {response.status_code}")

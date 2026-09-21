@@ -5,7 +5,9 @@ from fastapi import APIRouter
 from ..lib.db import ping as ping_database
 from ..lib.db import queries
 from ..lib.llm import ping as ping_ollama
+from ..lib.llm.client import get_model_name, get_provider
 from ..schemas import DbStatsResponse, HealthResponse
+from .parse import llm_parsing_enabled
 
 router = APIRouter()
 
@@ -61,4 +63,7 @@ def status():
         backend="ok",
         database="ok" if ping_database() else "error",
         ollama="ok" if ping_ollama() else "error",
+        llm_parser=llm_parsing_enabled(),
+        llm_provider=get_provider(),
+        llm_model=get_model_name(),
     )

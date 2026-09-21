@@ -15,6 +15,7 @@ RUN python -m playwright install --with-deps chromium
 
 COPY backend/ .
 COPY gs_data /gs_data
+COPY runs_data /runs_data
 
 EXPOSE 8003
 CMD ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "8003"]

@@ -64,6 +64,18 @@ TRANSIENT_ERRORS = (
 )
 
 
+def env_number(name: str, default, convert=float):
+    """Read a numeric setting, treating an empty value as not set.
+
+    docker-compose writes an optional setting as ``VAR: ${VAR:-}``, which puts
+    an empty string in the environment instead of leaving it out. float("")
+    raises, so a setting nobody chose would crash the request instead of
+    falling back to its default.
+    """
+    raw = os.environ.get(name, "").strip()
+    return convert(raw) if raw else default
+
+
 def _provider() -> str:
     """Return the active provider name, lowercased."""
     return os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
@@ -71,7 +83,17 @@ def _provider() -> str:
 
 def _timeout() -> float:
     """Return the request timeout in seconds."""
-    return float(os.environ.get("LLM_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+    return env_number("LLM_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
+
+
+def get_provider() -> str:
+    """Return the active provider name: "ollama" or "openrouter".
+
+    Public because the pages have to say who will answer. Whether a call
+    costs money depends on this alone, and a page that reads it from a
+    constant instead will sooner or later say the wrong thing.
+    """
+    return _provider()
 
 
 def get_model_name() -> str:
@@ -115,7 +137,7 @@ class Usage:
 
 def eur_per_usd() -> float:
     """Return the euro-per-dollar rate used to report costs."""
-    return float(os.environ.get("LLM_EUR_PER_USD", DEFAULT_EUR_PER_USD))
+    return env_number("LLM_EUR_PER_USD", DEFAULT_EUR_PER_USD)
 
 
 def generate(
@@ -170,7 +192,7 @@ def generate_with_usage(
 
 def _max_attempts() -> int:
     """Return how many times a request may be sent before giving up."""
-    return int(os.environ.get("LLM_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS))
+    return env_number("LLM_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS, int)
 
 
 def _post_json(
