@@ -22,8 +22,8 @@ Configuration is read from environment variables:
     LLM_EUR_PER_USD      euro per dollar used to report cost (default: 0.92)
 
 With ``LLM_PROVIDER`` unset the request sent to Ollama is exactly the one this
-module sent before it grew a second provider, so the path the grader exercises
-is unchanged.
+module sent before it grew a second provider, so the path the grader uses is
+unchanged.
 """
 
 import os
@@ -32,9 +32,9 @@ from dataclasses import dataclass
 
 import requests
 
-# Euro per dollar used to report cost. Providers bill in dollars, so the
-# dollar figure is the fact and the euro figure is a conversion; the rate is
-# configurable and recorded with each run so an old number stays readable.
+# Euro per dollar used to report cost. Providers bill in dollars, so that is
+# the fact and the euro figure is a conversion. The rate is recorded with each
+# run, so an old number can still be read.
 DEFAULT_EUR_PER_USD = 0.92
 
 DEFAULT_TIMEOUT_SECONDS = 180.0
@@ -46,17 +46,16 @@ DEFAULT_MAX_TOKENS = 1024
 
 OPENROUTER_HOST = "https://openrouter.ai/api/v1"
 
-# A long answer can have its connection dropped mid-body, and a busy
-# provider answers 429 or 503. Both are transient and worth retrying: a
-# whole page would otherwise be lost to a hiccup that lasts a second.
+# A long answer can lose its connection mid-body, and a busy provider answers
+# 429 or 503. Both pass, and retrying saves a whole page from a one-second
+# hiccup.
 DEFAULT_MAX_ATTEMPTS = 4
 RETRY_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 # Ollama also answers 404 "model not found" when the model is there but its
-# blob could not be opened. On macOS the gRPC FUSE mount that backs
-# ollama_data occasionally reports ENOENT for a file that exists, and the next
-# attempt succeeds. That failure mode is local to Ollama: a 404 from
-# OpenRouter means the model id is wrong, and retrying it is pointless.
+# blob could not be opened: on macOS the gRPC FUSE mount under ollama_data
+# sometimes reports ENOENT for a file that exists, and the next try works.
+# Only Ollama. A 404 from OpenRouter means the model id is wrong.
 OLLAMA_RETRY_STATUS_CODES = RETRY_STATUS_CODES | {404}
 TRANSIENT_ERRORS = (
     requests.ConnectionError,
@@ -76,10 +75,10 @@ def _timeout() -> float:
 
 
 def get_model_name() -> str:
-    """Return the model name currently configured for the active provider.
+    """Return the model name configured for the active provider.
 
-    This value is stored alongside every result, so runs made with different
-    models stay distinguishable in the database.
+    Stored with every result, so runs made with different models stay
+    distinguishable in the database.
     """
     if _provider() == "openrouter":
         return os.environ.get("OPENROUTER_MODEL", "qwen/qwen3.5-9b")
@@ -90,25 +89,28 @@ def get_model_name() -> str:
 class Usage:
     """What one model call consumed.
 
-    ``cost_usd`` is what the provider says it charged, not a figure computed
-    from a price list: prices change, promotions apply, and a provider may
-    bill cached input differently. Ollama runs on the machine and charges
-    nothing, so it reports zero - which is true, and the CPU seconds measured
-    elsewhere are where its cost shows up instead.
+    ``cost_usd`` is what the provider says it charged, not a figure from a
+    price list: prices change and cached input can be billed differently.
+    Ollama runs here and charges nothing, so it reports zero; its cost shows
+    up as the CPU seconds measured elsewhere.
     """
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost_usd: float = 0.0
     # Which upstream provider answered, and the id it filed the call under.
-    # OpenRouter is a router, not a model host: the same model id is served by
-    # several companies at different quantisations - fp4, fp8 and bf16 were all
-    # on offer for qwen3.5-9b - and without pinning it picks one per request.
-    # A run that does not record this cannot say which weights produced its
-    # numbers, and two runs of it cannot be compared. Empty on Ollama, which
-    # runs on this machine and has no upstream to name.
+    # OpenRouter is a router, not a host: the same model id is served by
+    # several companies at different quantisations - fp4, fp8 and bf16 were
+    # all on offer for qwen3.5-9b - and without pinning it picks one per
+    # request. A run that does not record this cannot say which weights
+    # produced its numbers. Empty on Ollama, which has no upstream to name.
     provider: str = ""
     generation_id: str = ""
+    # Why the model stopped writing. "length" means it hit max_tokens and the
+    # answer is cut mid-word; anything else means it finished by itself. From
+    # outside the two look the same - both return a non-empty string - so
+    # without this a truncated reply is read as a badly formatted one.
+    finish_reason: str = ""
 
 
 def eur_per_usd() -> float:
@@ -154,11 +156,10 @@ def generate_with_usage(
 ) -> tuple[str, Usage]:
     """Send a prompt and return the text together with what the call consumed.
 
-    Same call as ``generate``; the difference is that the accounting comes
-    back instead of being thrown away. A caller that reads a page in several
-    fragments needs it per fragment, because "what did this page cost" is the
-    sum of its calls and not something that can be reconstructed afterwards -
-    the provider reports a running total, not a per-request breakdown.
+    Same call as ``generate``, except the accounting comes back instead of
+    being thrown away. A caller that reads a page in several fragments needs
+    it per fragment: what the page cost is the sum of its calls, and the
+    provider only reports a running total afterwards.
     """
     if _provider() == "openrouter":
         return _generate_openrouter(prompt, response_format, max_tokens)
@@ -180,9 +181,9 @@ def _post_json(
 ) -> dict:
     """POST and return the decoded JSON body, retrying transient failures.
 
-    Reading the body is part of the retried block on purpose: a dropped
-    connection surfaces while the response is being consumed, not when it is
-    opened, so retrying only the request itself would miss the common case.
+    Reading the body is inside the retried block on purpose: a dropped
+    connection shows up while the response is being read, not when it is
+    opened, so retrying only the request would miss the common case.
 
     Args:
         retry_statuses: HTTP codes worth another attempt. The caller decides,
@@ -199,11 +200,10 @@ def _post_json(
                     f"{response.status_code} from provider", response=response
                 )
             if not response.ok:
-                # raise_for_status() reports the status and throws the body
+                # raise_for_status() keeps the status and throws the body
                 # away, but the body is where the provider explains itself:
                 # OpenRouter answers 400 with "Reasoning is mandatory for this
-                # endpoint and cannot be disabled", and without it all you see
-                # is "400 Client Error".
+                # endpoint", and without it you only see "400 Client Error".
                 raise requests.HTTPError(
                     f"{response.status_code} from provider: {response.text[:300]}",
                     response=response,
@@ -231,20 +231,19 @@ def _post_json(
 
 DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 
-# The judge scores extractions; the parser produces them. They do not have to
-# be the same model, and on a machine this size they should not be: the judge
-# runs on every page load of /parser, so it wants the smallest model that can
-# give a verdict, while the parser wants the strongest one that fits. Kept as
-# its own default so the judge's scores stay comparable with the ones the base
-# project recorded.
+# The judge scores extractions, the parser produces them, and on a machine
+# this size they should not be the same model: the judge runs on every load of
+# /parser and wants the smallest model that can give a verdict, the parser
+# wants the biggest that fits. Its own default, so the judge's scores stay
+# comparable with the ones the base project recorded.
 DEFAULT_JUDGE_MODEL = "llama3.2:3b"
 
 
 def get_judge_model_name() -> str:
     """Return the model the judge should use, for the active provider.
 
-    On OpenRouter there is one model and the judge shares it. Locally the
-    judge has its own, because the two jobs have opposite requirements.
+    On OpenRouter there is one model and the judge shares it. Locally it has
+    its own, because the two jobs want opposite things.
     """
     if _provider() == "openrouter":
         return get_model_name()
@@ -254,8 +253,8 @@ def get_judge_model_name() -> str:
 def _ollama_config(model: str | None = None) -> dict:
     """Read the Ollama host and model from the environment.
 
-    ``model`` overrides the configured one, for a caller that needs a
-    different model from the one the stack parses with.
+    ``model`` overrides the configured one, for a caller that needs something
+    other than the model the stack parses with.
     """
     return {
         "host": os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
@@ -266,16 +265,15 @@ def _ollama_config(model: str | None = None) -> dict:
 def _ollama_options(max_tokens: int, num_ctx: int | None = None) -> dict:
     """Build the Ollama options block.
 
-    ``num_ctx`` is only sent when asked for, so the default request stays
-    identical to the one the base project used. Setting it matters for long
-    inputs: Ollama silently drops whatever does not fit in the context window
-    instead of reporting an error, so a prompt longer than the default window
-    is truncated without any warning.
+    ``num_ctx`` is only sent when asked for, so the default request stays the
+    one the base project used. It matters for long inputs: Ollama drops
+    whatever does not fit in the window instead of reporting an error, so a
+    long prompt is truncated without warning.
 
-    It also costs memory. The window is allocated whether or not the prompt
-    fills it, so a caller with a short prompt must not inherit the parser's
-    setting: on this stack that turned a 2.9 GB judge model into a 4.4 GB one
-    for a prompt of under a thousand tokens.
+    It also costs memory, because the window is allocated whether the prompt
+    fills it or not. A caller with a short prompt must not inherit the
+    parser's setting: here that turned a 2.9 GB judge model into a 4.4 GB one
+    for a prompt under a thousand tokens.
     """
     options = {"temperature": 0, "num_predict": max_tokens}
     configured = num_ctx if num_ctx is not None else os.environ.get("OLLAMA_NUM_CTX")
@@ -314,6 +312,8 @@ def _generate_ollama(
         prompt_tokens=int(body.get("prompt_eval_count") or 0),
         completion_tokens=int(body.get("eval_count") or 0),
         cost_usd=0.0,
+        # Ollama calls it done_reason, same two values.
+        finish_reason=str(body.get("done_reason") or ""),
     )
 
 
@@ -333,10 +333,10 @@ def _openrouter_key() -> str:
 def _openrouter_response_format(response_format: dict | None) -> dict | None:
     """Wrap a bare JSON schema in the OpenAI-compatible envelope.
 
-    Ollama takes the schema directly; the OpenAI-style API expects it nested
+    Ollama takes the schema directly; the OpenAI-style API wants it nested
     under ``json_schema``. ``strict`` is left off on purpose: the open-weight
-    providers implement it unevenly and would reject the request outright,
-    while the judge already copes with a slightly malformed reply.
+    providers support it unevenly and would reject the request, and the judge
+    already copes with a slightly malformed reply.
     """
     if response_format is None:
         return None
@@ -365,16 +365,16 @@ def _openrouter_payload(
         "temperature": 0,
         "max_tokens": max_tokens,
         # Without this the reply carries no cost, and what a page cost could
-        # then only be guessed from a price list.
+        # only be guessed from a price list.
         "usage": {"include": True},
     }
 
-    # Extraction gains nothing from an explicit reasoning trace, which would
-    # cost output tokens and blur the comparison between models that have the
-    # feature and models that do not. Some models refuse to answer without it
-    # ("Reasoning is mandatory for this endpoint", HTTP 400), so comparing one
-    # of those means asking for it with LLM_ALLOW_REASONING=1 and saying so
-    # next to the result: that run is not measuring the same thing.
+    # Extraction gains nothing from a reasoning trace, which costs output
+    # tokens and blurs the comparison between models that have the feature and
+    # models that do not. Some refuse to answer without it ("Reasoning is
+    # mandatory for this endpoint", HTTP 400): comparing one of those means
+    # LLM_ALLOW_REASONING=1 and saying so next to the result, because that run
+    # is not measuring the same thing.
     if not _reasoning_allowed():
         payload["reasoning"] = {"enabled": False}
 
@@ -382,9 +382,9 @@ def _openrouter_payload(
     if schema is not None:
         payload["response_format"] = schema
 
-    # Pinning the upstream provider keeps the served quantisation stable
-    # across a run; without it the same model id can be answered by providers
-    # serving different weights, which would confound a comparison of sizes.
+    # Pinning the upstream provider keeps the quantisation stable across a
+    # run. Without it the same model id can be answered by providers serving
+    # different weights, which would confound any comparison.
     provider = os.environ.get("OPENROUTER_PROVIDER", "").strip()
     if provider:
         payload["provider"] = {"order": [provider], "allow_fallbacks": False}
@@ -407,12 +407,11 @@ def _generate_openrouter(
     choice = body["choices"][0]
     content = choice["message"].get("content") or ""
 
-    # An empty answer used to be handed back as an empty string, and the
-    # caller scored it as a page from which nothing was extracted: a zero that
-    # looks like a bad model instead of a failed call. A reasoning model is
-    # the usual cause - it spends the whole max_tokens budget on the reasoning
-    # field and never starts the answer - so say what happened rather than
-    # letting the run record a silent zero.
+    # An empty answer used to come back as an empty string, and the caller
+    # scored it as a page with nothing in it: a zero that looks like a bad
+    # model instead of a failed call. The usual cause is a reasoning model
+    # spending the whole budget on the reasoning field and never starting the
+    # answer, so say so instead of recording a silent zero.
     if not content.strip():
         reasoning = choice["message"].get("reasoning") or ""
         if reasoning.strip():
@@ -427,6 +426,7 @@ def _generate_openrouter(
     return content, Usage(
         provider=str(body.get("provider") or ""),
         generation_id=str(body.get("id") or ""),
+        finish_reason=str(choice.get("finish_reason") or ""),
         prompt_tokens=int(usage.get("prompt_tokens") or 0),
         completion_tokens=int(usage.get("completion_tokens") or 0),
         cost_usd=float(usage.get("cost") or 0.0),
