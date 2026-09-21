@@ -47,7 +47,8 @@
 <p class="page-sub">
   Le due pipeline ricevono lo <strong>stesso HTML</strong> e il risultato di entrambe viene
   misurato contro lo stesso gold standard, su tre assi: <strong>qualit&agrave;</strong> (F1),
-  <strong>velocit&agrave;</strong> (secondi per pagina) e <strong>risorse</strong>.
+  <strong>velocit&agrave;</strong> (secondi per pagina, da leggere solo fra locale e remoto)
+  e <strong>risorse</strong>.
 </p>
 
 <div class="note-box">
@@ -74,7 +75,7 @@
         <th>Rec.</th>
         <th>F1</th>
         <th>Excess</th>
-        <th>Sec/pag</th>
+        <th title="Secondi di orologio per pagina, non tempo di calcolo. Le run remote girano a piu' pagine in parallelo, quindi qui dentro c'e' anche la coda del fornitore.">Sec/pag *</th>
         <th>Risorse</th>
         <th>Costo</th>
       </tr>
@@ -102,7 +103,13 @@
         <td>{{ num(run.recall) }}</td>
         <td><strong>{{ num(run.f1) }}</strong></td>
         <td>{{ num(run.excess_ratio) }}</td>
-        <td>{{ '%.2f'|format(run.seconds) if run.seconds is not none and run.seconds < 10 else num(run.seconds, 0) }}</td>
+        <td>
+          {{- '%.2f'|format(run.seconds) if run.seconds is not none and run.seconds < 10 else num(run.seconds, 0) -}}
+          {%- if run.provider == 'openrouter' %}
+            <span class="delta-nil"
+                  title="Tempo di attesa su un servizio esterno, misurato in un dato momento: dipende da quanto era carico il fornitore, non dal modello.">&nbsp;*</span>
+          {%- endif %}
+        </td>
         <td>
           {% if run.input_tokens %}
             <span title="{% if run.skipped_tokens %}Escluse le pagine fuori contesto, mai inviate: {{ '{:,}'.format(run.skipped_tokens) }} token{% else %}Tutte le pagine sono state inviate{% endif %}">
@@ -138,6 +145,14 @@
   contate a parte e i loro token non compaiono fra quelli inviati. Le due pipeline
   <strong>spendono risorse diverse e non sommabili</strong>: Crawl4AI consuma CPU locale e
   zero token, un LLM remoto consuma token e zero CPU locale.
+</p>
+<p class="section-sub">
+  <strong>*</strong> Sulle run remote <strong>Sec/pag non misura il modello</strong>. &Egrave;
+  tempo di orologio speso ad aspettare un servizio esterno, con pi&ugrave; pagine in volo
+  insieme: lo stesso modello, sullo stesso fornitore e con la stessa quantizzazione, ha dato
+  <strong>125 s</strong> e <strong>307 s</strong> a pagina in due giorni diversi. Serve a
+  confrontare una pipeline remota con una locale, dove la distanza &egrave; di tre ordini di
+  grandezza e nessun carico la spiega; <strong>non</strong> a mettere in fila due run remote.
 </p>
 
 <h2 class="section-title">Confronto fra due run</h2>
@@ -203,12 +218,18 @@
         <td>{% if right_run.ok == left_run.ok %}<span class="delta-nil">pari</span>
             {% else %}<span class="{{ 'delta-pos' if right_run.ok > left_run.ok else 'delta-neg' }}">{{ '%+d'|format(right_run.ok - left_run.ok) }}</span>{% endif %}</td>
       </tr>
+      {% set entrambe_remote = left_run.provider == 'openrouter' and right_run.provider == 'openrouter' %}
       <tr>
         <td class="domain-cell">Velocit&agrave; (secondi per pagina)</td>
         <td>{{ '%.2f'|format(left_run.seconds) if left_run.seconds is not none }}</td>
         <td>{{ '%.2f'|format(right_run.seconds) if right_run.seconds is not none }}</td>
         <td>
-          {% if left_run.seconds and right_run.seconds %}
+          {% if entrambe_remote %}
+            <!-- Niente rapporto fra due run remote: sarebbe un confronto fra
+                 due fornitori in due momenti, non fra i due sistemi. -->
+            <span class="delta-nil"
+                  title="Due servizi esterni misurati in momenti diversi: la differenza dice quanto erano carichi, non quale sia piu' veloce.">non confrontabile</span>
+          {% elif left_run.seconds and right_run.seconds %}
             {% set ratio = left_run.seconds / right_run.seconds %}
             <span class="{{ 'delta-pos' if ratio > 1 else 'delta-neg' }}">
               B {{ '%.0f'|format(ratio if ratio > 1 else 1 / ratio) }}&times; {{ "più veloce" if ratio > 1 else "più lenta" }}
@@ -216,6 +237,15 @@
           {% else %}<span class="delta-nil">—</span>{% endif %}
         </td>
       </tr>
+      {% if entrambe_remote %}
+      <tr>
+        <td colspan="4" class="section-sub" style="text-align:left;padding-top:0">
+          Le due run girano su servizi esterni, a pagine parallele e in momenti diversi: i
+          secondi misurano il carico del fornitore, non i due sistemi. Sulla velocit&agrave;
+          il confronto che regge &egrave; contro Crawl4AI, che gira su questa macchina.
+        </td>
+      </tr>
+      {% endif %}
       <tr>
         <td class="domain-cell">Risorse</td>
         <td>{% if left_run.input_tokens %}{{ '{:,}'.format(left_run.input_tokens) }} token{% elif left_run.cpu_seconds %}{{ '%.1f'|format(left_run.cpu_seconds) }} s CPU{% else %}—{% endif %}</td>
