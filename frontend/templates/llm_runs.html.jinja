@@ -364,10 +364,58 @@
   </table>
 </div>
 <p class="section-sub">
-  Correlazione con l'F1 del gold standard: <strong>{{ num(sc.r_check) }}</strong> il verdetto del
-  modello ({% if sc.cost_eur %}€ {{ '%.4f'|format(sc.cost_eur) }}{% else %}a pagamento{% endif %}),
+  Correlazione con l'F1 del gold standard: <strong>{{ num(sc.r_check) }}</strong> il verdetto
+  s&igrave;/no del modello ({% if sc.cost_eur %}€ {{ '%.4f'|format(sc.cost_eur) }}{% else %}a pagamento{% endif %}){% if sc.r_coherence_cut is not none %},
+  <strong>{{ num(sc.r_coherence_cut) }}</strong> lo stesso giudizio chiesto come punteggio 0-5 e
+  riportato a s&igrave;/no alla soglia {{ sc.coherent_from }}{% endif %},
   <strong>{{ num(sc.r_grounded) }}</strong> l'ancoraggio, che si calcola in locale e non costa nulla.
 </p>
+
+{% if sc.scored %}
+<p class="section-sub">
+  La stessa domanda posta come punteggio d&agrave; in media
+  <strong>{{ '%.2f'|format(sc.coherence_mean) }}/5</strong> su {{ sc.scored }} pagine. Non &egrave;
+  una seconda misura: &egrave; la stessa, a una risoluzione diversa. Il booleano decide il verdetto
+  perch&eacute; &egrave; la formulazione che &egrave; stata misurata, ma &egrave; anche quello che
+  cambia da una run all'altra, mentre il punteggio no.
+</p>
+{% endif %}
+
+{% if sc.quote_verdicts %}
+{% set claimed = sc.quote_verdicts.values()|sum %}
+<h3 class="section-title" style="font-size:1rem">Le citazioni, verificate dal codice</h3>
+<p class="section-sub">
+  Alla domanda &laquo;manca qualcosa?&raquo; il modello non risponde s&igrave; o no: deve
+  <strong>citare</strong> i passi che secondo lui non sono arrivati nel Markdown. Ogni citazione
+  viene poi cercata dal programma nella pagina e nell'estrazione, e solo
+  <em>confermata</em> &egrave; un'omissione vera. Su questa run il modello ha prodotto
+  <strong>{{ claimed }}</strong> citazioni e ne sono rimaste in piedi
+  <strong>{{ sc.omissions }}</strong>: &egrave; la ragione per cui la completezza non viene
+  dichiarata dal modello ma verificata dal codice.
+</p>
+<div class="stats-table-wrap" style="margin-bottom:1rem">
+  <table class="stats-table table-dense">
+    <thead>
+      <tr><th style="text-align:left">Esito della citazione</th><th>Quante</th>
+          <th style="text-align:left">Che cosa significa</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="domain-cell"><span class="pill pill-skip">confermata</span></td>
+          <td><strong>{{ sc.quote_verdicts.get('confermata', 0) }}</strong></td>
+          <td style="text-align:left">Il passo &egrave; nella pagina e non nell'estrazione: omissione vera.</td></tr>
+      <tr><td class="domain-cell"><span class="pill pill-ok">presente</span></td>
+          <td><strong>{{ sc.quote_verdicts.get('presente', 0) }}</strong></td>
+          <td style="text-align:left">Il passo era gi&agrave; nel Markdown: il modello segnala come mancante qualcosa che aveva estratto.</td></tr>
+      <tr><td class="domain-cell"><span class="pill pill-skip">inventata</span></td>
+          <td><strong>{{ sc.quote_verdicts.get('inventata', 0) }}</strong></td>
+          <td style="text-align:left">Il passo non compare nella pagina: la citazione non &egrave; verbatim.</td></tr>
+      <tr><td class="domain-cell"><span class="delta-nil">troppo corta</span></td>
+          <td><strong>{{ sc.quote_verdicts.get('troppo corta', 0) }}</strong></td>
+          <td style="text-align:left">Sotto i 25 caratteri: potrebbe combaciare per caso, non viene contata.</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 <details style="margin-bottom:1.25rem">
 <summary class="section-sub" style="cursor:pointer">Le {{ sc.checked }} pagine, una per una</summary>
@@ -375,6 +423,7 @@
   <table class="stats-table table-dense">
     <thead>
       <tr><th>Pagina</th><th>F1</th><th>Ancoraggio</th><th>Verdetto</th>
+          <th>Citazioni</th>
           <th style="text-align:left">Motivazione del modello</th></tr>
     </thead>
     <tbody>
@@ -386,14 +435,39 @@
         <td>
           {%- if page.check_coherent %}<span class="pill pill-ok">coerente</span>
           {%- else %}<span class="pill pill-skip">incoerente</span>{% endif %}
+          {%- if page.check_coherence is not none %}
+            <span class="delta-nil">{{ page.check_coherence }}/5</span>{% endif %}
           {%- if page.check_fragments and page.check_fragments > 1 %}
             <span class="delta-nil">{{ page.check_fragments }} pezzi</span>{% endif %}
         </td>
+        <td>
+          {%- if page.check_quote_verdicts %}
+            {%- for quote in page.check_quote_verdicts %}
+            <div title="{{ quote.quote }}">
+              {%- if quote.verdict == 'confermata' %}<span class="pill pill-skip">confermata</span>
+              {%- elif quote.verdict == 'presente' %}<span class="pill pill-ok">presente</span>
+              {%- else %}<span class="delta-nil">{{ quote.verdict }}</span>{% endif %}
+            </div>
+            {%- endfor %}
+          {%- else %}&mdash;{% endif %}
+        </td>
         <td style="text-align:left;font-family:inherit">
-          <!-- La larghezza sta sul div e non sulla cella: una cella di tabella
-               si dimensiona sul contenuto e ignora max-width, quindi il testo
-               allargava la tabella oltre la pagina invece di andare a capo. -->
-          <div style="width:32rem;font-size:0.82rem;line-height:1.4">{{ page.check_notes or '' }}</div>
+          <!-- La larghezza va sul div, non sulla cella: una cella ignora
+               max-width e il testo allargava la tabella fuori pagina. -->
+          <div style="width:32rem;font-size:0.82rem;line-height:1.4">
+            {{ page.check_notes or '' }}
+            {%- if page.check_coherence_evidence %}
+            <!-- Il passo che il modello cita a sostegno del punteggio. -->
+            <div style="margin-top:0.35rem;padding-left:0.6rem;border-left:2px solid var(--border, #d8d8d8);color:var(--muted, #666)">
+              {{ page.check_coherence_evidence|truncate(300, true) }}
+            </div>
+            {%- endif %}
+            {%- for quote in page.check_quote_verdicts %}
+            <div style="margin-top:0.35rem;font-size:0.78rem">
+              <em>{{ quote.verdict }}</em>: {{ quote.quote|truncate(160, true) }}
+            </div>
+            {%- endfor %}
+          </div>
         </td>
       </tr>
       {% endfor %}

@@ -1,6 +1,6 @@
 """Schemas for the LLM-parser run endpoints."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LlmRunSummary(BaseModel):
@@ -34,10 +34,9 @@ class LlmRunSummary(BaseModel):
     # True when the amount is the run's total read from the provider's
     # balance, with no per-page breakdown behind it.
     cost_is_aggregate: bool = False
-    # Wall-clock seconds of the whole run, and what they cost on this machine.
-    # Present for every run; meaningful for the ones nobody invoiced, where it
-    # is the only cost there is. Not comparable with cost_eur without saying
-    # so: an invoice carries a provider's margin, this does not.
+    # Wall-clock seconds of the whole run, and what they cost on this
+    # machine. It is the only cost a local run has. Not comparable with
+    # cost_eur as it stands: an invoice includes a margin, this does not.
     wall_seconds: float | None = None
     local_cost_eur: float | None = None
     local_cost_electricity_eur: float | None = None
@@ -78,9 +77,9 @@ class LlmPageRow(BaseModel):
     # Share of the extraction found in the page's visible text. A low value
     # means the model described a page other than this one.
     grounded: float | None = None
-    # What the model said about its own extraction, with no gold standard in
-    # front of it. None means this run was never checked, which is not the
-    # same as a page that was checked and passed.
+    # What the model said about its own extraction, without the gold
+    # standard. None means the run was never checked, which is not the same
+    # as a page that was checked and passed.
     check_complete: bool | None = None
     check_coherent: bool | None = None
     check_notes: str | None = None
@@ -93,20 +92,49 @@ class LlmSelfCheckSummary(BaseModel):
     checked: int
     passed: int
     failed: int
-    # Mean F1 on each side of the verdict. The distance between these two is
-    # the whole measurement: a check that separates nothing puts them level.
+    # Mean F1 on each side of the verdict. The distance between the two is
+    # the measurement: a check that separates nothing leaves them level.
     f1_passed: float | None = None
     f1_failed: float | None = None
     f1_all: float | None = None
     not_complete: int = 0
     not_coherent: int = 0
     cost_eur: float | None = None
-    # How well each measure tracks the gold-standard F1, on this run. The
-    # point of putting them side by side is that one of them is free.
+    # The same verdict as a 0-5 score, averaged over the pages that have one.
+    # ``scored`` says how many they are.
+    coherence_mean: float | None = None
+    scored: int = 0
+    # Omissions the code confirmed, over the whole run. What the model claimed
+    # is in the per-page rows: the gap between the two is the point.
+    omissions: int = 0
+    # How the claimed omissions turned out, by verdict: confermata, presente,
+    # inventata, troppo corta.
+    quote_verdicts: dict[str, int] = Field(default_factory=dict)
+    # How well each measure tracks the gold-standard F1. They are side by
+    # side because one of them costs nothing.
     r_check: float | None = None
     r_grounded: float | None = None
+    # The same verdict as a score: raw, and cut back to a yes/no at
+    # ``coherent_from``. Kept beside r_check to compare the two.
+    r_coherence: float | None = None
+    r_coherence_cut: float | None = None
+    coherent_from: int | None = None
     # The discarded half of the question, kept so the choice is visible.
     r_complete: float | None = None
+
+
+class LlmQuoteCheck(BaseModel):
+    """One passage the model said was missing, and where it really was.
+
+    The verdict comes from the code, not from the model: only "confermata" is
+    a real omission. The other three are different ways of getting the claim
+    wrong, kept apart instead of collapsed into one boolean.
+    """
+
+    quote: str = ""
+    verdict: str = ""
+    in_page: bool = False
+    in_extraction: bool = False
 
 
 class LlmSelfCheckRow(BaseModel):
@@ -121,6 +149,15 @@ class LlmSelfCheckRow(BaseModel):
     check_notes: str | None = None
     check_fragments: int | None = None
     check_cost_eur: float | None = None
+    # The verdict as a 0-5 score, and the passage the model quoted for it.
+    # None on an older run, checked before the score existed.
+    check_coherence: int | None = None
+    check_coherence_evidence: str | None = None
+    # What the model said was missing, and what the code found. Claims without
+    # omissions is the normal case, not a problem.
+    check_claimed_missing: list[str] = Field(default_factory=list)
+    check_quote_verdicts: list[LlmQuoteCheck] = Field(default_factory=list)
+    check_omissions: int | None = None
 
 
 class LlmComparisonRow(BaseModel):

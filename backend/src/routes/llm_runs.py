@@ -1,14 +1,14 @@
 """Route handlers for the stored LLM-parser runs.
 
-Every endpoint here only reads rows that an explicit run already wrote. None
-of them calls a model, so opening the comparison page costs nothing and takes
-no time, whichever provider is configured.
+Every endpoint here only reads rows an import script already wrote. None of
+them calls a model, so opening the comparison page costs nothing.
 """
 
 from fastapi import APIRouter, HTTPException
 
 from ..lib.db import llm_queries
 from ..lib.evaluation import local_cost
+from ..lib.llm.models import COHERENT_FROM
 from ..schemas.llm_runs import (
     LlmComparisonRow,
     LlmDomainRow,
@@ -27,9 +27,8 @@ router = APIRouter()
 def _pearson(xs: list[float], ys: list[float]) -> float | None:
     """Return Pearson's r, or None when one of the two series does not vary.
 
-    Used to ask whether a verdict carries information about the score. A
-    constant series has no correlation to report, and returning 0 for it would
-    read as "measured, and no relation" instead of "not measurable".
+    None and not 0: a constant series has no correlation to report, and 0
+    would read as "measured, no relation" instead of "not measurable".
     """
     if len(xs) < 2:
         return None
@@ -41,6 +40,20 @@ def _pearson(xs: list[float], ys: list[float]) -> float | None:
     if not sx or not sy:
         return None
     return sum(a * b for a, b in zip(dx, dy)) / (sx * sy)
+
+
+def _count_verdicts(pages: list[dict]) -> dict[str, int]:
+    """Count how the claimed omissions turned out, over the whole run.
+
+    Per run and not per page: the question is how much of everything the
+    model claimed was really missing.
+    """
+    counts: dict[str, int] = {}
+    for page in pages:
+        for check in page.get("check_quote_verdicts") or []:
+            verdict = check.get("verdict") or "sconosciuto"
+            counts[verdict] = counts.get(verdict, 0) + 1
+    return counts
 
 
 def _side(run_id: int, url: str) -> LlmTextSide | None:
@@ -67,14 +80,12 @@ def _side(run_id: int, url: str) -> LlmTextSide | None:
 def list_llm_runs():
     """Return every stored run with its headline numbers.
 
-    The local cost is derived here rather than stored: it is a function of the
-    run's duration and of four parameters about one machine, and those
-    parameters change without the run changing. Freezing a figure into the
-    database would mean a corrected electricity price could never reach the
-    runs already recorded.
+    The local cost is computed here instead of stored, because it depends on
+    four parameters about this machine that can change without the run
+    changing: a corrected electricity price has to reach the old runs too.
 
-    It stays empty for a run made against a remote provider, whose seconds
-    were spent waiting rather than computing.
+    It stays empty for a run on a remote provider, whose seconds were spent
+    waiting rather than computing.
     """
     runs = llm_queries.list_runs()
     for run in runs:
@@ -108,9 +119,8 @@ def llm_run_pages(run_id: int):
 def llm_run_self_check(run_id: int):
     """Return the run's self-check summary and the pages it judged.
 
-    404 when the run exists but was never checked: an empty summary would read
-    as "the model found nothing wrong", which is the opposite of "nobody
-    asked it".
+    404 when the run exists but was never checked: an empty summary would
+    read as "nothing wrong found" instead of "nobody asked".
     """
     summary = llm_queries.get_self_check_summary(run_id)
     if summary is None:
@@ -119,9 +129,8 @@ def llm_run_self_check(run_id: int):
         )
     pages = llm_queries.get_self_check_pages(run_id)
     scored = [p for p in pages if p["f1"] is not None]
-    # The verdict is the coherence answer alone; the completeness answer is
-    # correlated too, and kept, because "we measured it and dropped it" is a
-    # result and "we never looked" is not.
+    # The verdict is the coherence answer alone. Completeness is correlated
+    # too and kept, because dropping it was a measurement, not an oversight.
     summary["r_check"] = _pearson(
         [float(p["check_coherent"]) for p in scored], [p["f1"] for p in scored]
     )
@@ -132,6 +141,20 @@ def llm_run_self_check(run_id: int):
     summary["r_grounded"] = _pearson(
         [p["grounded"] for p in anchored], [p["f1"] for p in anchored]
     )
+    # The same verdict as a 0-5 score, on the pages that have one. None is
+    # not 0: reading it as 0 would fail every page of an older run.
+    graded = [p for p in scored if p["check_coherence"] is not None]
+    summary["r_coherence"] = _pearson(
+        [float(p["check_coherence"]) for p in graded], [p["f1"] for p in graded]
+    )
+    # The score turned back into a yes/no at COHERENT_FROM, so it can be put
+    # next to the model's own boolean: same question, two resolutions.
+    summary["coherent_from"] = COHERENT_FROM
+    summary["r_coherence_cut"] = _pearson(
+        [float(p["check_coherence"] >= COHERENT_FROM) for p in graded],
+        [p["f1"] for p in graded],
+    )
+    summary["quote_verdicts"] = _count_verdicts(pages)
     return {
         "summary": LlmSelfCheckSummary(**summary),
         "pages": [LlmSelfCheckRow(**row) for row in pages],

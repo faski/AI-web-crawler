@@ -1,9 +1,8 @@
 """SQL over the LLM-parser evaluation runs.
 
-A run is one pass of the LLM parser over the gold standard with a given model
-and condition. Results are written once, by an explicit run, and read back
-many times by the comparison page: looking at the numbers must never cost a
-model call.
+A run is one pass of the LLM parser over the gold standard. Results are
+written once by an import script and read many times by the comparison page,
+which must never cost a model call.
 """
 
 import json
@@ -34,9 +33,8 @@ def save_run(
 ) -> int:
     """Store one run and its pages, replacing a run with the same label.
 
-    Re-importing the same results file updates the run in place instead of
-    creating a second copy, so the comparison page never shows the same run
-    twice.
+    Re-importing the same file replaces the run instead of adding a second
+    copy. The old rows go with it, self-check verdicts included.
 
     Returns:
         The id of the stored run.
@@ -74,15 +72,13 @@ def save_run(
                 record.get("empty_fragments"),
                 record.get("cost_usd"),
                 record.get("cost_eur"),
-                # Stored as JSON text: it is a list read back whole for
-                # display, never filtered or summed in SQL.
+                # JSON text: read back whole for display, never used in SQL.
                 json.dumps(record["call_costs_usd"])
                 if record.get("call_costs_usd")
                 else None,
                 record.get("prompt_tokens"),
                 record.get("completion_tokens"),
-                # JSON text like call_costs_usd: one entry per call, read
-                # back whole to say which provider served the page.
+                # JSON text too: one entry per call, to say who served it.
                 json.dumps(record["providers"]) if record.get("providers") else None,
                 json.dumps(record["generation_ids"])
                 if record.get("generation_ids")
@@ -108,10 +104,9 @@ def save_run(
 def list_runs() -> list[dict]:
     """Return every stored run with its headline numbers, newest first.
 
-    The averages cover only the pages that were actually parsed: a page the
-    model could not fit would otherwise drag a mean towards zero and hide the
-    real quality of the pages it did handle. How many were skipped is reported
-    separately, as ``too_long``.
+    The averages cover only the pages that were parsed: a page that did not
+    fit would drag the mean down. The skipped ones are counted separately, as
+    ``too_long``.
     """
     rows = fetch_all(
         """
@@ -126,18 +121,15 @@ def list_runs() -> list[dict]:
                AVG(CASE WHEN p.status='ok' THEN p.excess_ratio END),
                AVG(CASE WHEN p.status='ok' THEN p.seconds END),
                SUM(CASE WHEN p.status='ok' THEN p.cpu_seconds END),
-               -- Wall-clock time of the whole run, which is what the machine
-               -- spent drawing power and wearing out. The average above is
-               -- for reading; this one is for costing.
+               -- Wall-clock time of the whole run, used to cost the local
+               -- hardware. The average above is only for reading.
                SUM(CASE WHEN p.status='ok' THEN p.seconds END),
-               -- Only the pages that were actually sent. A page skipped for
-               -- being too long has a token count too, but it never reached
-               -- the model and must not appear as consumption.
+               -- Only the pages actually sent. A skipped page has a token
+               -- count too, but it never reached the model.
                SUM(CASE WHEN p.status='ok' THEN p.input_tokens END),
                SUM(CASE WHEN p.status<>'ok' THEN p.input_tokens END),
-               -- Chunking's own cost: one model call per piece, so a run that
-               -- cut ten pages into four pieces each paid thirty calls more
-               -- than the page count suggests.
+               -- One call per piece, so a chunked run pays for more calls
+               -- than it has pages.
                SUM(CASE WHEN p.status='ok' THEN COALESCE(p.fragments, 1) END),
                SUM(CASE WHEN p.status='ok' AND p.fragments > 1 THEN 1 END),
                -- The per-page sum when there is one, otherwise the figure
@@ -177,9 +169,9 @@ def list_runs() -> list[dict]:
 def set_measured_cost(label: str, cost_eur: float) -> None:
     """Record what a run cost overall, for a run with no per-call breakdown.
 
-    Used for runs made before the per-call accounting existed: the amount is
-    read from the provider's balance before and after, which is the truth for
-    the run even though it cannot be split across pages.
+    For runs made before the per-call accounting existed. The amount comes
+    from the provider's balance before and after, so it is right for the run
+    but cannot be split across pages.
     """
     connection = get_connection()
     command = connection.cursor()
@@ -225,23 +217,19 @@ def attach_self_check(run_id: int, results: list[dict]) -> int:
     """Store the model's verdicts on the pages of a run already imported.
 
     The check is a second pass over an extraction that already exists, so the
-    verdicts are written onto the rows of that run rather than imported as a
-    run of their own: the question "did the model catch its own bad page" is
-    only answerable with the score and the verdict side by side.
+    verdicts become columns of that run's pages instead of a run of their own.
+    Only with the verdict and the F1 side by side can you ask whether the
+    model caught its own bad pages.
 
-    ``grounded`` is updated at the same time. The check recomputes it from the
-    stored Markdown, and the runs made before that measurement existed have
-    nothing in the column.
+    ``grounded`` is filled in at the same time: the check recomputes it, and
+    older runs have nothing in that column.
 
     Returns:
         How many pages were updated.
     """
     checked = [r for r in results if r.get("status") == "ok"]
-    # Counted before writing, by asking which of these URLs this run actually
-    # has. The rowcount an UPDATE returns through this driver is not usable
-    # for the purpose - it came back 0 on a write that landed correctly - and
-    # a wrong count here would either hide a mismatched run or raise a false
-    # alarm on a good import.
+    # Counted before writing, by asking which URLs this run has. The driver's
+    # UPDATE rowcount is no use here: it came back 0 on a write that landed.
     known = {
         row[0]
         for row in fetch_all(
@@ -305,12 +293,11 @@ def get_run_pages(run_id: int) -> list[dict]:
             "excess_ratio": row[8],
             "fragments": row[9],
             "cost_eur": row[10],
-            # The per-call breakdown is stored as JSON text; a page read in
-            # one call has a single entry, a page read in four has four.
+            # JSON text: one entry per call.
             "call_costs_usd": json.loads(row[11]) if row[11] else None,
             "grounded": row[12],
-            # NULL when this run was never self-checked, which the template
-            # has to tell apart from a page the model checked and passed.
+            # NULL when the run was never self-checked, which is not the same
+            # as a page that was checked and passed.
             "check_complete": None if row[13] is None else bool(row[13]),
             "check_coherent": None if row[14] is None else bool(row[14]),
             "check_notes": row[15],
@@ -323,21 +310,15 @@ def get_run_pages(run_id: int) -> list[dict]:
 def get_self_check_summary(run_id: int) -> dict | None:
     """Return how the model's own verdicts line up with the gold standard.
 
-    The verdict is ``check_coherent`` alone. The model was asked two questions
-    and the second one turned out to be worthless: "is anything missing"
-    tracked the gold standard at r = +0.06 on this run, because answering it
-    means noticing an absence and then deciding whether the extraction rules
-    authorised it, and a 9B model reports the absence without applying the
-    filter. Combining the two with AND therefore destroyed the information the
-    coherence answer carries. ``not_complete`` is still reported, as the
-    measurement that led to dropping it.
+    The verdict is ``check_coherent`` alone. The other question the model was
+    asked, "is anything missing", tracked the gold standard at r = +0.06, so
+    combining the two with AND only threw information away. ``not_complete``
+    is still reported, as the measurement that led to dropping it.
 
-    The number that matters is not how often the check is "right" - a check
-    that passes everything agrees with a corpus that is mostly good, and says
-    nothing - but how far apart the two groups sit: the mean F1 of the pages
-    it promoted against the mean F1 of the pages it failed. A gap means the
-    verdict carries information; no gap means it does not, whatever its
-    agreement rate.
+    What to look at is not how often the check is right - one that passes
+    everything agrees with a corpus that is mostly good - but the distance
+    between the two mean F1s, promoted pages against failed ones. A gap means
+    the verdict says something.
 
     Returns None when this run was never checked.
     """
@@ -350,7 +331,13 @@ def get_self_check_summary(run_id: int) -> dict | None:
                SUM(NOT check_complete),
                SUM(NOT check_coherent),
                SUM(check_cost_eur),
-               AVG(f1)
+               AVG(f1),
+               -- The same verdict as a 0-5 score. Averaged only over the
+               -- pages that have one: older runs stored just the boolean.
+               AVG(check_coherence),
+               COUNT(check_coherence),
+               -- Omissions the code confirmed, not claims the model made.
+               SUM(check_omissions)
         FROM llm_page_results
         WHERE run_id = ? AND check_coherent IS NOT NULL
         """,
@@ -368,22 +355,29 @@ def get_self_check_summary(run_id: int) -> dict | None:
         "not_coherent": int(row[5] or 0),
         "cost_eur": row[6],
         "f1_all": row[7],
+        "coherence_mean": row[8],
+        "scored": int(row[9] or 0),
+        "omissions": int(row[10] or 0),
     }
 
 
 def get_self_check_pages(run_id: int) -> list[dict]:
     """Return the checked pages, the ones the check failed first.
 
-    Ordered so the disagreements are on top: a page the model failed with a
-    high F1 is a false alarm, and one it passed with a low F1 is a miss. Both
-    are what someone reading this page came to see. The order follows the
-    coherence answer, which is the verdict; the completeness answer travels
-    with the row but does not decide anything.
+    Ordered so the disagreements come first: a page failed with a high F1 is
+    a false alarm, one passed with a low F1 is a miss. The order follows the
+    coherence answer, which is the verdict; completeness comes along but does
+    not decide anything.
+
+    The quotes come with the row too: what the model said was missing, and
+    what the code found when it looked for it.
     """
     rows = fetch_all(
         """
         SELECT url, domain, f1, grounded, check_complete, check_coherent,
-               check_notes, check_fragments, check_cost_eur
+               check_notes, check_fragments, check_cost_eur,
+               check_coherence, check_coherence_evidence,
+               check_claimed_missing, check_quote_verdicts, check_omissions
         FROM llm_page_results
         WHERE run_id = ? AND check_coherent IS NOT NULL
         ORDER BY check_coherent ASC, f1 ASC
@@ -396,9 +390,30 @@ def get_self_check_pages(run_id: int) -> list[dict]:
             "check_complete": bool(row[4]), "check_coherent": bool(row[5]),
             "check_notes": row[6], "check_fragments": row[7],
             "check_cost_eur": row[8],
+            "check_coherence": row[9],
+            "check_coherence_evidence": row[10],
+            "check_claimed_missing": _decode_json(row[11], []),
+            "check_quote_verdicts": _decode_json(row[12], []),
+            "check_omissions": row[13],
         }
         for row in rows
     ]
+
+
+def _decode_json(raw: str | None, fallback: list) -> list:
+    """Return a JSON column as a list, or ``fallback`` if there is nothing.
+
+    NULL is the normal case: a page with no claimed omissions stores no array.
+    Broken JSON is treated the same way instead of raising, so one bad row
+    cannot break the whole page.
+    """
+    if not raw:
+        return fallback
+    try:
+        decoded = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return fallback
+    return decoded if isinstance(decoded, list) else fallback
 
 
 def get_page_text(run_id: int, url: str) -> str | None:
@@ -413,9 +428,8 @@ def get_page_text(run_id: int, url: str) -> str | None:
 def compare_runs(left_id: int, right_id: int) -> list[dict]:
     """Return the pages of two runs side by side, biggest difference first.
 
-    A page is listed even when only one of the two runs could parse it: those
-    are exactly the cases where one condition reaches a page the other cannot,
-    which is the comparison worth seeing.
+    A page is listed even when only one of the two runs could parse it: that
+    is exactly the case worth seeing.
     """
     rows = fetch_all(
         """
