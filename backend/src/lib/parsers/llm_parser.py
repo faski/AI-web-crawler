@@ -99,6 +99,31 @@ class TruncatedAnswerError(RuntimeError):
         self.max_tokens = max_tokens
 
 
+class EmptyExtractionError(RuntimeError):
+    """Raised when the model returned nothing at all for a page that has text.
+
+    A fragment is allowed to answer NOTHING_HERE: most of a raw page is code,
+    and a piece can be nothing but code. A whole page answering it is another
+    matter. The pages in this corpus all carry an article, so an extraction
+    that comes back empty is the model refusing the page, not a page with no
+    content - and scoring that as an extraction records a 0.000 next to the
+    honest mistakes, as if the model had read the page and got it wrong.
+
+    Raised so the caller can tell the two apart. What it does with the
+    difference is the caller's business: the batch run records the page as
+    empty and leaves it out of the averages, the web route reports a failed
+    extraction instead of handing back a blank document.
+    """
+
+    def __init__(self, url: str, fragments: int):
+        super().__init__(
+            f"the model returned no content for {url}"
+            + (f" in any of its {fragments} pieces" if fragments > 1 else "")
+        )
+        self.url = url
+        self.fragments = fragments
+
+
 class HtmlTooLongError(RuntimeError):
     """Raised when the HTML does not fit the configured input budget.
 
@@ -225,6 +250,18 @@ def _clean_fragment(raw_response: str) -> str:
     if cleaned.strip().strip(".").casefold() == NOTHING_FOUND.casefold():
         return ""
     return cleaned
+
+
+def _says_nothing(text: str) -> bool:
+    """Return whether ``text`` carries no content.
+
+    Empty is the usual shape, produced by stitching fragments that all said
+    NOTHING_HERE. The word itself has to be caught too: only the fragment
+    prompt offers it, so a whole page answering it is off-contract, and the
+    string would otherwise be scored as if the model had extracted it.
+    """
+    stripped = text.strip()
+    return not stripped or stripped.strip(".").casefold() == NOTHING_FOUND.casefold()
 
 
 def _without_repeated_title(text: str, context: html_chunker.PageContext) -> str:
@@ -429,11 +466,25 @@ class LlmParser:
         """
         if not _chunking_enabled():
             self._assert_fits(url, html_text)
-            return self._measured(html_text, self._parse_whole(url, html_text))
+            outcome = self._measured(html_text, self._parse_whole(url, html_text))
+        elif estimate_tokens(html_text) <= _fragment_budget():
+            outcome = self._measured(html_text, self._parse_whole(url, html_text))
+        else:
+            outcome = self._parse_in_fragments(url, html_text)
+        return self._refuse_if_empty(url, outcome)
 
-        if estimate_tokens(html_text) <= _fragment_budget():
-            return self._measured(html_text, self._parse_whole(url, html_text))
-        return self._parse_in_fragments(url, html_text)
+    @staticmethod
+    def _refuse_if_empty(url: str, outcome: ParseOutcome) -> ParseOutcome:
+        """Return ``outcome``, unless the model gave back nothing at all.
+
+        Checked here and not in the two readers so the rule holds however the
+        page was read: one call answering NOTHING_HERE and four calls all
+        answering it are the same failure, and both used to arrive as an
+        extraction of the empty string.
+        """
+        if _says_nothing(outcome.text):
+            raise EmptyExtractionError(url, outcome.fragments)
+        return outcome
 
     @staticmethod
     def _measured(html_text: str, outcome: ParseOutcome) -> ParseOutcome:

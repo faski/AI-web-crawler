@@ -29,7 +29,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.lib.evaluation import calculate_content_metrics, calculate_token_level_metrics
 from src.lib.llm import client
-from src.lib.parsers.llm_parser import HtmlTooLongError, LlmParser, estimate_tokens
+from src.lib.parsers.llm_parser import (
+    EmptyExtractionError,
+    HtmlTooLongError,
+    LlmParser,
+    estimate_tokens,
+)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from try_llm_parser import add_provider_flag, apply_provider, load_pages, strip_code
@@ -75,6 +80,17 @@ def run_page(page: dict, strip: bool, keep_text: bool) -> dict:
     except HtmlTooLongError as error:
         record.update(status="too_long", budget_tokens=error.budget_tokens)
         log(f"  [troppo lunga] {page['url']}  {record['input_tokens']:,} token")
+        return record
+    except EmptyExtractionError as error:
+        # Not an error of the run and not an extraction either: the model read
+        # the page and answered that there was nothing on it. Kept apart from
+        # both so it stops being averaged in as a 0.000.
+        record.update(
+            status="empty",
+            seconds=round(time.monotonic() - started, 1),
+            fragments=error.fragments,
+        )
+        log(f"  [vuota] {page['url'][:62]:62} nessun contenuto restituito")
         return record
     except Exception as error:  # noqa: BLE001 - one page must not stop the run
         record.update(status="error", error=f"{type(error).__name__}: {error}")
@@ -131,7 +147,7 @@ def summarise(records: list[dict]) -> None:
     """Print a per-domain table and the totals."""
     domains = sorted({r["domain"] for r in records})
     header = (
-        f"{'dominio':18} {'ok':>5} {'lunghe':>7} {'err':>4} "
+        f"{'dominio':18} {'ok':>5} {'vuote':>6} {'lunghe':>7} {'err':>4} "
         f"{'prec':>6} {'rec':>6} {'f1':>6} {'cos':>6} {'exc':>6} {'sec':>6}"
     )
     print("\n" + header)
@@ -139,18 +155,19 @@ def summarise(records: list[dict]) -> None:
     for domain in domains:
         rows = [r for r in records if r["domain"] == domain]
         ok = [r for r in rows if r["status"] == "ok"]
+        empty = sum(1 for r in rows if r["status"] == "empty")
         too_long = sum(1 for r in rows if r["status"] == "too_long")
         errors = sum(1 for r in rows if r["status"] == "error")
         if ok:
             mean = lambda key: sum(r[key] for r in ok) / len(ok)  # noqa: E731
             print(
-                f"{domain:18} {len(ok):>5} {too_long:>7} {errors:>4} "
+                f"{domain:18} {len(ok):>5} {empty:>6} {too_long:>7} {errors:>4} "
                 f"{mean('precision'):>6.3f} {mean('recall'):>6.3f} "
                 f"{mean('f1'):>6.3f} {mean('cosine'):>6.3f} "
                 f"{mean('excess_ratio'):>6.3f} {mean('seconds'):>6.0f}"
             )
         else:
-            print(f"{domain:18} {len(ok):>5} {too_long:>7} {errors:>4}"
+            print(f"{domain:18} {len(ok):>5} {empty:>6} {too_long:>7} {errors:>4}"
                   f"{'  nessuna pagina riuscita':>40}")
 
     ok = [r for r in records if r["status"] == "ok"]
@@ -164,6 +181,7 @@ def summarise(records: list[dict]) -> None:
         mean = lambda key: sum(r[key] for r in ok) / len(ok)  # noqa: E731
         print(
             f"{'TOTALE':18} {len(ok):>5} "
+            f"{sum(1 for r in records if r['status']=='empty'):>6} "
             f"{sum(1 for r in records if r['status']=='too_long'):>7} "
             f"{sum(1 for r in records if r['status']=='error'):>4} "
             f"{mean('precision'):>6.3f} {mean('recall'):>6.3f} "
@@ -224,7 +242,7 @@ def main() -> None:
         done = {
             r["url"]: r
             for r in previous["records"]
-            if r["status"] in ("ok", "too_long")
+            if r["status"] in ("ok", "too_long", "empty")
         }
         failed = len(previous["records"]) - len(done)
         print(f"ripresa: {len(done)} pagine gia' fatte in {args.out}"

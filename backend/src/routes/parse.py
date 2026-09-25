@@ -28,6 +28,7 @@ from ..lib.llm import client
 from ..lib.db import llm_queries, queries
 from ..lib.db.models import WebResource
 from ..lib.parsers.llm_parser import (
+    EmptyExtractionError,
     HtmlTooLongError,
     LlmParser,
     TruncatedAnswerError,
@@ -109,6 +110,15 @@ def _extract(
         )
     except TruncatedAnswerError as error:
         raise HTTPException(status_code=502, detail=str(error))
+    except EmptyExtractionError as error:
+        # An empty document would look like a parsed page with nothing on it.
+        # It is the opposite: the page has content and the model refused it.
+        raise HTTPException(
+            status_code=502,
+            detail=f"Il modello non ha restituito alcun contenuto per {error.url}"
+                   + (f", in nessuno dei {error.fragments} pezzi in cui la "
+                      "pagina e' stata divisa." if error.fragments > 1 else "."),
+        )
     except RuntimeError as error:
         # Missing key, empty answer, provider down: the model gave nothing
         # usable, and none of these is a bad page.
